@@ -49,11 +49,11 @@ public class BuildingRendererTests
         Square();
         r.Regenerate();
         var floor = go.transform.Find("Floor 0");
-        Assert.AreNotEqual(0, floor.gameObject.hideFlags & HideFlags.DontSave);
+        Assert.AreEqual(HideFlags.DontSave, floor.gameObject.hideFlags & HideFlags.DontSave);
         foreach (var mf in go.GetComponentsInChildren<MeshFilter>())
         {
-            Assert.AreNotEqual(0, mf.gameObject.hideFlags & HideFlags.DontSave);
-            Assert.AreNotEqual(0, mf.sharedMesh.hideFlags & HideFlags.DontSave);
+            Assert.AreEqual(HideFlags.DontSave, mf.gameObject.hideFlags & HideFlags.DontSave);
+            Assert.AreEqual(HideFlags.DontSave, mf.sharedMesh.hideFlags & HideFlags.DontSave);
         }
     }
 
@@ -79,6 +79,41 @@ public class BuildingRendererTests
         int count = 0;
         foreach (Transform t in go.transform) if (t.name == "Floor 0") count++;
         Assert.AreEqual(1, count);
+    }
+
+    [Test] public void Instantiate_DoesNotDestroyOriginalMeshes()
+    {
+        Square();
+        r.Regenerate();
+        var clone = Object.Instantiate(go);
+        try
+        {
+            var walls = go.transform.Find("Floor 0/Walls").GetComponent<MeshFilter>();
+            Assert.IsTrue(walls.sharedMesh != null);
+            Assert.Greater(walls.sharedMesh.vertexCount, 0);
+            Assert.IsTrue(walls.GetComponent<MeshCollider>().sharedMesh != null);
+        }
+        finally { Object.DestroyImmediate(clone); }
+    }
+
+    [Test] public void UserChildNamedFloorLamp_SurvivesRegenerate()
+    {
+        Square();
+        var lamp = new GameObject("Floor Lamp");
+        lamp.transform.SetParent(go.transform, false);
+        r.Regenerate();
+        r.Regenerate(0);
+        Assert.IsTrue(lamp != null);
+    }
+
+    [Test] public void DestroyingRenderer_RemovesGeneratedMeshesAndChildren()
+    {
+        Square();
+        r.Regenerate();
+        var mesh = go.transform.Find("Floor 0/Walls").GetComponent<MeshFilter>().sharedMesh;
+        Object.DestroyImmediate(r);
+        Assert.IsTrue(mesh == null);
+        Assert.IsNull(go.transform.Find("Floor 0"));
     }
 
     [Test] public void RemoveLinkedNode_Regenerate_NoThrow()

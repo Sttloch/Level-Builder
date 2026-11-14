@@ -13,35 +13,42 @@ namespace LevelBuilder
     public class BuildingRenderer : MonoBehaviour
     {
         const HideFlags GenFlags = HideFlags.DontSave | HideFlags.NotEditable;
-        static Material cachedDefault;
+        static Material fallbackMaterial;
 
         public Material defaultMaterial;
 
         Building building;
         bool pending;
         readonly List<int> tmp = new List<int>();
+        readonly HashSet<Mesh> owned = new HashSet<Mesh>();
+        readonly SortedSet<int> toBuild = new SortedSet<int>();
 
         Building B => building != null ? building : (building = GetComponent<Building>());
 
         static Material DefaultMaterial()
         {
-            if (cachedDefault != null) return cachedDefault;
-            Material m = null;
             var rp = GraphicsSettings.currentRenderPipeline;
-            if (rp != null) m = rp.defaultMaterial;
-            if (m == null)
-            {
-                var sh = Shader.Find("Standard");
-                if (sh == null) return null;
-                m = new Material(sh) { name = "LevelBuilder Default", hideFlags = HideFlags.DontSave };
-            }
-            cachedDefault = m;
-            return m;
+            if (rp != null && rp.defaultMaterial != null) return rp.defaultMaterial;
+            if (fallbackMaterial != null) return fallbackMaterial;
+            var sh = Shader.Find("Standard");
+            if (sh == null) return null;
+            fallbackMaterial = new Material(sh) { name = "LevelBuilder Default", hideFlags = HideFlags.DontSave };
+            return fallbackMaterial;
+        }
+
+        // Only DontSave children named "Floor {n}" are ours; user children are never touched.
+        static bool IsGeneratedFloor(Transform t, out int index)
+        {
+            index = -1;
+            return (t.gameObject.hideFlags & HideFlags.DontSave) == HideFlags.DontSave
+                && t.name.StartsWith("Floor ")
+                && int.TryParse(t.name.Substring(6), out index);
         }
 
         void OnEnable()
         {
             B.Changed += OnChanged;
+            B.ConsumeDirty(tmp); // pending state is covered by the full regenerate below
             Regenerate();
         }
 
@@ -54,17 +61,26 @@ namespace LevelBuilder
             pending = false;
         }
 
+        void OnDestroy()
+        {
+            for (int c = transform.childCount - 1; c >= 0; c--)
+            {
+                var t = transform.GetChild(c);
+                if (IsGeneratedFloor(t, out _)) DestroyFloorObject(t.gameObject);
+            }
+            foreach (var m in owned) if (m != null) DestroyObj(m);
+            owned.Clear();
+        }
+
         void OnChanged()
         {
 #if UNITY_EDITOR
-            if (!Application.isPlaying)
-            {
-                // Defer: OnValidate cannot create/destroy GameObjects, and this batches same-frame changes.
-                if (!pending) { pending = true; EditorApplication.update += EditorFlush; }
-                return;
-            }
-#endif
+            // Always defer in the editor (also in play mode): OnValidate cannot create/destroy
+            // GameObjects, and this batches same-frame changes. EditorApplication.update ticks in play mode.
+            if (!pending) { pending = true; EditorApplication.update += EditorFlush; }
+#else
             Flush();
+#endif
         }
 
 #if UNITY_EDITOR
@@ -82,51 +98,62 @@ namespace LevelBuilder
             if (this == null || B == null) return;
             bool all = B.ConsumeDirty(tmp);
             if (all) { Regenerate(-1); return; }
-            foreach (var i in tmp) Regenerate(i);
+            toBuild.Clear();
+            foreach (var i in tmp) AddWithNeighbours(i);
+            BuildSet();
+        }
+
+        void AddWithNeighbours(int i)
+        {
+            for (int k = i - 1; k <= i + 1; k++) toBuild.Add(k);
         }
 
         /// <summary>Rebuilds a floor (and its neighbours, whose ceiling/slab depend on it). -1 = all floors.</summary>
         public void Regenerate(int floorIndex = -1)
         {
-            var data = B.data;
-            if (data == null) return;
-            int n = data.floors.Count;
-
+            if (B.data == null) return;
+            toBuild.Clear();
             if (floorIndex < 0)
             {
-                for (int c = transform.childCount - 1; c >= 0; c--)
-                {
-                    var t = transform.GetChild(c);
-                    if (t.name.StartsWith("Floor ")) DestroyFloorObject(t.gameObject);
-                }
-                for (int i = 0; i < n; i++) BuildFloorObject(i);
-                return;
+                RemoveGenerated(-1);
+                for (int i = 0; i < B.data.floors.Count; i++) toBuild.Add(i);
             }
+            else AddWithNeighbours(floorIndex);
+            BuildSet();
+        }
 
+        void BuildSet()
+        {
+            int n = B.data.floors.Count;
+            RemoveGenerated(n);
+            foreach (var i in toBuild)
+                if (i >= 0 && i < n) BuildFloorObject(i);
+            toBuild.Clear();
+        }
+
+        // Removes generated floors with index >= n (stale); n < 0 removes all generated floors.
+        void RemoveGenerated(int n)
+        {
             for (int c = transform.childCount - 1; c >= 0; c--)
             {
                 var t = transform.GetChild(c);
-                if (t.name.StartsWith("Floor ") && int.TryParse(t.name.Substring(6), out int idx) && idx >= n)
+                if (IsGeneratedFloor(t, out int idx) && (n < 0 || idx >= n))
                     DestroyFloorObject(t.gameObject);
             }
-            for (int i = floorIndex - 1; i <= floorIndex + 1; i++)
-                if (i >= 0 && i < n) BuildFloorObject(i);
         }
 
         void BuildFloorObject(int i)
         {
-            string name = "Floor " + i;
             for (int c = transform.childCount - 1; c >= 0; c--)
             {
                 var t = transform.GetChild(c);
-                if (t.name == name) DestroyFloorObject(t.gameObject);
+                if (IsGeneratedFloor(t, out int idx) && idx == i) DestroyFloorObject(t.gameObject);
             }
 
-            var data = B.data;
-            var f = data.floors[i];
-            bool top = i == data.floors.Count - 1;
+            var f = B.data.floors[i];
+            bool top = i == B.data.floors.Count - 1;
 
-            var root = new GameObject(name) { hideFlags = GenFlags };
+            var root = new GameObject("Floor " + i) { hideFlags = GenFlags };
             root.transform.SetParent(transform, false);
             AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation));
             AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f));
@@ -143,15 +170,20 @@ namespace LevelBuilder
             var mesh = md.ToMesh();
             mesh.hideFlags = GenFlags;
             mesh.name = name;
+            owned.Add(mesh);
             mf.sharedMesh = mesh;
             mr.sharedMaterial = defaultMaterial != null ? defaultMaterial : DefaultMaterial();
             if (mesh.vertexCount > 0) mc.sharedMesh = mesh;
         }
 
-        static void DestroyFloorObject(GameObject root)
+        // Only meshes this instance created are destroyed; inherited (e.g. Instantiate-copied) ones are shared.
+        void DestroyFloorObject(GameObject root)
         {
             foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
-                if (mf.sharedMesh != null) DestroyObj(mf.sharedMesh);
+            {
+                var m = mf.sharedMesh;
+                if (m != null && owned.Remove(m)) DestroyObj(m);
+            }
             DestroyObj(root);
         }
 
