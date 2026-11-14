@@ -150,6 +150,22 @@ public class WallOpeningMeshTests
         WallMeshBuilderTests.AssertWindingMatchesNormals(md);
     }
 
+    [Test] public void TwoDoorsOnOneWall_BothNotched_Watertight()
+    {
+        var (b, f, s) = Wall6();
+        b.AddOpening(f, s.id, Door(1.5f));
+        b.AddOpening(f, s.id, Door(4.5f));
+        var md = WallMeshBuilder.Build(f, 0f);
+        foreach (var side in new[] { "/L", "/R" })
+        {
+            AssertNoCentroidInside(md, s.id + side, 1.05f, 1.95f, 0f, 2.1f);
+            AssertNoCentroidInside(md, s.id + side, 4.05f, 4.95f, 0f, 2.1f);
+            Assert.AreEqual(18f - 2f * 0.9f * 2.1f, GroupArea(md, s.id + side), 1e-3f);
+        }
+        WallMeshBuilderTests.AssertWatertight(md, 0f);
+        WallMeshBuilderTests.AssertWindingMatchesNormals(md);
+    }
+
     [Test] public void Openings_WatertightInRoomAtBaseY()
     {
         var b = new BuildingData();

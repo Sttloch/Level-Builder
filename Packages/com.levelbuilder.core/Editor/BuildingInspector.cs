@@ -133,18 +133,30 @@ namespace LevelBuilder.Editor
                         EditorGUILayout.HelpBox("No cabe: " + OpeningPlacement.IssueText(r.issue) +
                             ". No se recorta la pared ni se genera hasta que sea válida.", MessageType.Warning);
 
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PrefixLabel(new GUIContent("Id",
+                    "Identificador de la abertura. Desde código: building.FindDoor(id) devuelve la puerta generada."));
+                EditorGUILayout.SelectableLabel(o.id, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                if (GUILayout.Button("Copiar id", GUILayout.Width(72))) EditorGUIUtility.systemCopyBuffer = o.id;
+            }
+
+            // Type changes go through OpeningPlacement.SetType: a door always gets sill 0.
+            EditorGUI.BeginChangeCheck();
+            var newType = (OpeningType)EditorGUILayout.EnumPopup("Tipo", o.type);
+            if (EditorGUI.EndChangeCheck() && newType != o.type)
+                OpeningPlacement.SetType(b, fi, o.id, newType);
+
             serializedObject.Update();
             var p = serializedObject.FindProperty(
                 $"data.floors.Array.data[{fi}].segments.Array.data[{si}].openings.Array.data[{oi}]");
             if (p == null) return;
 
             EditorGUI.BeginChangeCheck();
-            var typeProp = p.FindPropertyRelative("type");
-            EditorGUILayout.PropertyField(typeProp, new GUIContent("Tipo"));
             EditorGUILayout.PropertyField(p.FindPropertyRelative("width"), new GUIContent("Ancho"));
             EditorGUILayout.PropertyField(p.FindPropertyRelative("height"), new GUIContent("Alto"));
-            var kind = (OpeningType)typeProp.enumValueIndex;
-            if (kind == OpeningType.Window)
+            var kind = o.type;
+            if (OpeningPlacement.HasSill(kind))
                 EditorGUILayout.PropertyField(p.FindPropertyRelative("sill"), new GUIContent("Alféizar"));
             EditorGUILayout.PropertyField(p.FindPropertyRelative("center"),
                 new GUIContent("Centro", "Metros desde el nodo inicial de la pared."));
@@ -185,9 +197,17 @@ namespace LevelBuilder.Editor
                 EditorGUILayout.PropertyField(door.FindPropertyRelative("key"), new GUIContent("Tecla"));
             if (activation.enumValueIndex != (int)DoorActivation.Script)
             {
+                // Empty playerTag = any collider (other doors' leaves excepted).
                 var tag = door.FindPropertyRelative("playerTag");
-                string t = EditorGUILayout.TagField("Tag del jugador", tag.stringValue);
-                if (t != tag.stringValue) tag.stringValue = t;
+                bool any = string.IsNullOrEmpty(tag.stringValue);
+                bool newAny = EditorGUILayout.Toggle(new GUIContent("Cualquier objeto",
+                    "Cualquier collider activa la puerta, sin mirar su tag."), any);
+                if (newAny != any) tag.stringValue = newAny ? "" : "Player";
+                if (!newAny)
+                {
+                    string t = EditorGUILayout.TagField("Tag del jugador", tag.stringValue);
+                    if (t != tag.stringValue) tag.stringValue = t;
+                }
             }
             EditorGUILayout.PropertyField(door.FindPropertyRelative("locked"), new GUIContent("Cerrada con llave"));
             EditorGUILayout.PropertyField(door.FindPropertyRelative("leafPrefab"),

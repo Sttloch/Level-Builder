@@ -193,6 +193,34 @@ namespace LevelBuilder.Editor
             return o;
         }
 
+        /// <summary>
+        /// Wall coordinate u (metres from the start node) of a door's hinge edge. hingeOnRight = right of a viewer on
+        /// the wall's R face looking at it; that viewer has the end node on their right, so the hinge is at u1.
+        /// </summary>
+        public static float HingeU(WallOpening o) =>
+            o.door != null && o.door.hingeOnRight ? o.center + o.width * 0.5f : o.center - o.width * 0.5f;
+
+        /// <summary>Windows and empty openings have an editable sill; doors always stand on the floor.</summary>
+        public static bool HasSill(OpeningType t) => t != OpeningType.Door;
+
+        /// <summary>Changes the type in place; a door gets sill 0 (its leaf is generated at floor level).</summary>
+        public static void ApplyType(WallOpening o, OpeningType t)
+        {
+            if (o == null) return;
+            o.type = t;
+            if (!HasSill(t)) o.sill = 0f;
+        }
+
+        /// <summary>Changes the opening's type (see <see cref="ApplyType"/>) as one Undo step.</summary>
+        public static bool SetType(Building b, int floorIndex, string openingId, OpeningType t)
+        {
+            var f = b.data.floors[floorIndex];
+            if (b.data.FindOpening(f, openingId).o == null) return false;
+            BuildingEditorUtil.Mutate(b, "Tipo de abertura", floorIndex,
+                () => ApplyType(b.data.FindOpening(f, openingId).o, t));
+            return true;
+        }
+
         /// <summary>Removes the opening as one Undo step.</summary>
         public static bool Remove(Building b, int floorIndex, string openingId)
         {

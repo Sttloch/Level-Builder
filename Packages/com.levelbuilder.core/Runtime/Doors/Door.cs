@@ -7,6 +7,14 @@ namespace LevelBuilder
     /// <summary>
     /// Runtime door. The transform sits at the base-centre of the opening, forward = wall normal.
     /// <see cref="leaf"/> is a child whose pose at first use is the closed pose.
+    /// <para>Hinge: <see cref="DoorSettings.hingeOnRight"/> is the right of a viewer standing on the door's +Z side
+    /// (the wall's R face) looking at the wall, i.e. door-local −X; otherwise the hinge is at +X.
+    /// <see cref="Open()"/> and one-way doors swing toward −Z (away from that viewer); <see cref="Open(Vector3)"/>
+    /// on a two-way door swings away from the given position. Sliding leaves move from the hinge side toward the
+    /// free edge.</para>
+    /// <para>Interact activation reads <see cref="DoorSettings.key"/> through <see cref="DoorInput"/>: with only the
+    /// new Input System, keys outside A–Z, 0–9, Space and Return are not mapped, and the gamepad West button
+    /// always interacts.</para>
     /// </summary>
     [DisallowMultipleComponent]
     public class Door : MonoBehaviour
@@ -39,24 +47,36 @@ namespace LevelBuilder
         void OnEnable() { EnsureTrigger(); }
         void OnDisable() { _inside.Clear(); }
 
-        public void Open() { Motion.Open(Motion.Progress > 0f ? Motion.Direction : 1); }
+        bool HingeOnRight => settings != null && settings.hingeOnRight;
 
+        // Door-local x sign of the hinge edge: right of a viewer on the +Z side facing -Z is -X (left-handed frame).
+        float HingeSign => HingeOnRight ? -1f : 1f;
+
+        // Swing direction whose free edge ends on the given local z side (+1 / -1). Rotating by +angle about +Y
+        // moves the free edge (at -HingeSign from the hinge) toward z = HingeSign.
+        int DirectionToward(float zSide) => zSide * HingeSign >= 0f ? 1 : -1;
+
+        /// <summary>Opens toward −Z (or keeps the current swing while not fully closed).</summary>
+        public void Open() { Motion.Open(Motion.Progress > 0f ? Motion.Direction : DirectionToward(-1f)); }
+
+        /// <summary>Two-way doors swing away from <paramref name="from"/>; one-way doors behave like <see cref="Open()"/>.</summary>
         public void Open(Vector3 from)
         {
-            int dir = 1;
-            if (settings != null && settings.bothWays)
-            {
-                // Pick the swing whose free edge ends up on the side opposite to 'from'.
-                float side = transform.InverseTransformPoint(from).z >= 0f ? 1f : -1f;
-                float hingeSign = settings.hingeOnRight ? 1f : -1f;
-                dir = (int)(side * -hingeSign);
-            }
-            Motion.Open(dir);
+            if (settings == null || !settings.bothWays) { Open(); return; }
+            float side = transform.InverseTransformPoint(from).z >= 0f ? 1f : -1f;
+            Motion.Open(DirectionToward(-side));
         }
 
         public void Close() { Motion.Close(); }
         public void Toggle() { if (Motion.IsOpen) Close(); else Open(); }
-        public void Unlock() { Motion.Locked = false; }
+
+        /// <summary>Unlocks; a Proximity door with someone already inside opens away from them.</summary>
+        public void Unlock()
+        {
+            Motion.Locked = false;
+            if (settings != null && settings.activation == DoorActivation.Proximity && TryOccupant(out var occ))
+                Open(occ.transform.position);
+        }
 
         void Update()
         {
@@ -78,7 +98,10 @@ namespace LevelBuilder
                     if (_hadOccupant && !has) Close();
                 }
                 else if (settings.activation == DoorActivation.Interact && has && interactSource(settings.key))
-                    Toggle();
+                {
+                    if (Motion.IsOpen) Close();
+                    else if (TryOccupant(out var occ)) Open(occ.transform.position);
+                }
             }
             _hadOccupant = has;
         }
@@ -86,7 +109,7 @@ namespace LevelBuilder
         public void Tick(float dt)
         {
             var m = Motion;
-            float speed = settings != null ? settings.speed : 2f;
+            float speed = settings != null ? Mathf.Max(0f, settings.speed) : 2f;
             m.Step(dt, speed, out bool opened, out bool closed);
             ApplyPose();
             if (opened) onOpened?.Invoke();
@@ -105,10 +128,10 @@ namespace LevelBuilder
             CaptureClosedPose();
             if (leaf == null) return;
             var m = Motion;
-            bool onRight = settings != null && settings.hingeOnRight;
+            float hingeSign = HingeSign;
             if (settings != null && settings.kind == DoorKind.Sliding)
             {
-                float dist = leafSize.x * 0.95f * m.Progress * (onRight ? -1f : 1f);
+                float dist = -hingeSign * leafSize.x * 0.95f * m.Progress;
                 leaf.localPosition = _closedPos + new Vector3(dist, 0f, 0f);
                 leaf.localRotation = _closedRot;
             }
@@ -116,7 +139,7 @@ namespace LevelBuilder
             {
                 float openAngle = settings != null ? settings.openAngle : 95f;
                 var rot = Quaternion.AngleAxis(m.Direction * openAngle * m.Progress, Vector3.up);
-                var hinge = _closedPos + new Vector3((onRight ? 1f : -1f) * leafSize.x * 0.5f, 0f, 0f);
+                var hinge = _closedPos + new Vector3(hingeSign * leafSize.x * 0.5f, 0f, 0f);
                 leaf.localPosition = hinge + rot * (_closedPos - hinge);
                 leaf.localRotation = rot * _closedRot;
             }
@@ -140,13 +163,24 @@ namespace LevelBuilder
             // door's leaf are never occupants.
             if (other.transform.IsChildOf(transform) || other.GetComponentInParent<Door>() != null) return false;
             string tag = settings != null ? settings.playerTag : null;
-            return string.IsNullOrEmpty(tag) || other.gameObject.tag == tag;
+            if (string.IsNullOrEmpty(tag) || other.gameObject.tag == tag) return true;
+            // Compound players: the tag is often on the Rigidbody's object, not on the child collider.
+            var body = other.attachedRigidbody;
+            return body != null && body.gameObject.tag == tag;
         }
 
         bool HasOccupant()
         {
             _inside.RemoveWhere(c => c == null || !c.enabled || !c.gameObject.activeInHierarchy);
             return _inside.Count > 0;
+        }
+
+        bool TryOccupant(out Collider occupant)
+        {
+            occupant = null;
+            if (!HasOccupant()) return false;
+            foreach (var c in _inside) { occupant = c; return true; }
+            return false;
         }
 
         void OnTriggerEnter(Collider other) { HandleEnter(other); }
@@ -156,6 +190,7 @@ namespace LevelBuilder
         {
             if (!Matches(other)) return;
             _inside.Add(other);
+            _hadOccupant = true;
             if (settings != null && settings.activation == DoorActivation.Proximity)
                 Open(other.transform.position);
         }

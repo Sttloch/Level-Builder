@@ -11,7 +11,7 @@ namespace LevelBuilder.Editor
     /// Hover a wall: preview of the active preset (green if it fits, red if not). Click: select the opening under
     /// the mouse, or place a new one (centre snapped to 0.1 m along the wall; Ctrl/Cmd: no snap). Drag a selected
     /// opening: move it along its wall or onto another (one Undo step). Handles: width (symmetric), height (top)
-    /// and, on windows, sill (bottom, top fixed). Delete/Backspace: delete the selected opening (never the Building).
+    /// and, on windows and empty openings, sill (bottom, top fixed). Selected doors show their hinge edge. Delete/Backspace: delete the selected opening (never the Building).
     /// Esc: deselect. Type and preset are set from the overlay.
     /// </summary>
     [EditorTool("Aberturas", typeof(Building))]
@@ -96,11 +96,19 @@ namespace LevelBuilder.Editor
 
         void OnUndoRedo()
         {
-            pressedOpeningId = null;
+            ResetPress();
             hoverSegmentId = hoverOpeningId = null;
             layoutDirty = true;
             OpeningSelection.Validate();
             SceneView.RepaintAll();
+        }
+
+        // Forget a press/drag in progress (its opening may be gone): the next drag opens a new Undo group.
+        void ResetPress()
+        {
+            pressedOpeningId = null;
+            pressDragged = false;
+            dragUndoGroup = -1;
         }
 
         void Observe(Building b)
@@ -298,7 +306,7 @@ namespace LevelBuilder.Editor
                 SetSize(b, f, fi, oid, x => x.width = OpeningPlacement.WidthFromEdge(x.center, U(t, p, a, dir)));
             if (Slide(W(o.center, v1), up, out p))
                 SetSize(b, f, fi, oid, x => x.height = OpeningPlacement.HeightFromTop(x.sill, V(t, p, f)));
-            if (o.type == OpeningType.Window && Slide(W(o.center, v0), up, out p))
+            if (OpeningPlacement.HasSill(o.type) && Slide(W(o.center, v0), up, out p))
                 SetSize(b, f, fi, oid, x =>
                 {
                     OpeningPlacement.SillFromBottom(x.sill, x.height, V(t, p, f), out float s, out float h);
@@ -344,7 +352,7 @@ namespace LevelBuilder.Editor
             if (!HasSelection(b, f)) return false;
             OpeningPlacement.Remove(b, fi, OpeningSelection.openingId);
             OpeningSelection.Clear();
-            pressedOpeningId = null;
+            ResetPress();
             layoutDirty = true;
             return true;
         }
@@ -409,6 +417,7 @@ namespace LevelBuilder.Editor
                     bool hover = r.opening.id == hoverOpeningId;
                     var c = !r.valid ? InvalidColor : sel ? SelectedColor : ValidColor;
                     DrawRect(b, f, a, dir, r.u0, r.u1, r.v0, r.v1, c, sel || hover ? 4f : 2.5f);
+                    if (sel && r.opening.type == OpeningType.Door) DrawHinge(b, f, a, dir, r, s.thickness);
                     if (!r.valid)
                         Handles.Label(BuildingEditorUtil.PlanToWorld(b, a + dir * ((r.u0 + r.u1) * 0.5f), f.elevation + r.v1 + 0.15f),
                             OpeningPlacement.IssueText(r.issue), EditorStyles.whiteBoldLabel);
@@ -425,6 +434,22 @@ namespace LevelBuilder.Editor
                         hoverFits ? FitsColor : InvalidColor, 3f);
                 }
             }
+        }
+
+        // Hinge edge of the selected door: a post through the wall thickness plus a dot at its foot.
+        static void DrawHinge(Building b, FloorData f, Vector2 a, Vector2 dir, OpeningRect r, float thickness)
+        {
+            float u = OpeningPlacement.HingeU(r.opening);
+            var n = new Vector2(-dir.y, dir.x) * (thickness * 0.5f);
+            var p = a + dir * u;
+            Handles.color = SelectedColor;
+            Handles.DrawAAPolyLine(6f, BuildingEditorUtil.PlanToWorld(b, p, f.elevation + r.v0),
+                BuildingEditorUtil.PlanToWorld(b, p, f.elevation + r.v1));
+            Handles.DrawAAPolyLine(4f, BuildingEditorUtil.PlanToWorld(b, p - n, f.elevation + r.v0),
+                BuildingEditorUtil.PlanToWorld(b, p + n, f.elevation + r.v0));
+            var foot = BuildingEditorUtil.PlanToWorld(b, p, f.elevation + r.v0);
+            Handles.DrawSolidDisc(foot, b.transform.up, HandleUtility.GetHandleSize(foot) * 0.05f);
+            Handles.Label(BuildingEditorUtil.PlanToWorld(b, p, f.elevation + r.v1 + 0.15f), "Bisagra", EditorStyles.whiteMiniLabel);
         }
 
         static void DrawRect(Building b, FloorData f, Vector2 a, Vector2 dir, float u0, float u1, float v0, float v1, Color c, float width)

@@ -54,10 +54,11 @@ namespace LevelBuilder.Geometry
         static OpeningIssue Classify(OpeningRect r, WallOpening o, bool built, float len, (float start, float end) cut,
             float h, List<OpeningRect> accepted)
         {
-            if (o.width < MinSize || o.height < MinSize) return OpeningIssue.TooSmall;
-            if (!built || r.u0 < 0f || r.u1 > len) return OpeningIssue.OutsideWall;
+            // Written as !(x >= limit) so NaN fails every check (and ±∞ falls outside the wall).
+            if (!(o.width >= MinSize) || !(o.height >= MinSize)) return OpeningIssue.TooSmall;
+            if (!built || !(r.u0 >= 0f) || !(r.u1 <= len)) return OpeningIssue.OutsideWall;
             if (r.u0 < cut.start + Margin || r.u1 > len - cut.end - Margin) return OpeningIssue.IntoJoint;
-            if (o.sill < 0f || r.v1 > h - Margin) return OpeningIssue.TooTall;
+            if (!(o.sill >= 0f) || !(r.v1 <= h - Margin)) return OpeningIssue.TooTall;
             foreach (var a in accepted)
                 if (r.u0 < a.u1 + Margin && a.u0 < r.u1 + Margin) return OpeningIssue.Overlap;
             return OpeningIssue.None;

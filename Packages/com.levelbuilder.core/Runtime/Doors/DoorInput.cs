@@ -5,7 +5,11 @@ using UnityEngine.InputSystem;
 
 namespace LevelBuilder
 {
-    /// <summary>Interact-key query that works with the legacy Input Manager and/or the new Input System.</summary>
+    /// <summary>
+    /// Interact-key query that works with the legacy Input Manager and/or the new Input System.
+    /// With only the new Input System active, <see cref="KeyCode"/>s outside A–Z, 0–9, Space and Return are not
+    /// mapped (they never trigger), and the gamepad West button (X / Square) always triggers Interact, whatever the key.
+    /// </summary>
     public static class DoorInput
     {
         public static bool InteractPressed(KeyCode key)

@@ -121,4 +121,25 @@ public class OpeningLayoutTests
         b.AddOpening(f, seg.id, Door(3f, 0.2f));
         Assert.AreEqual(OpeningIssue.TooSmall, Single(f, seg.id).issue);
     }
+
+    [Test] public void NaNOrInfinite_IsInvalid()
+    {
+        var cases = new[]
+        {
+            (Door(3f, float.NaN), OpeningIssue.TooSmall),
+            (Door(3f, 0.9f, float.NaN), OpeningIssue.TooSmall),
+            (Door(float.NaN), OpeningIssue.OutsideWall),
+            (Door(float.PositiveInfinity), OpeningIssue.OutsideWall),
+            (Door(3f, float.PositiveInfinity), OpeningIssue.OutsideWall),
+            (new WallOpening { type = OpeningType.Window, center = 3f, width = 0.9f, height = 1f, sill = float.NaN }, OpeningIssue.TooTall),
+        };
+        foreach (var (o, issue) in cases)
+        {
+            var b = Wall6(out var f, out var seg);
+            b.AddOpening(f, seg.id, o);
+            var r = Single(f, seg.id);
+            Assert.IsFalse(r.valid, $"w={o.width} h={o.height} c={o.center} s={o.sill}");
+            Assert.AreEqual(issue, r.issue, $"w={o.width} h={o.height} c={o.center} s={o.sill}");
+        }
+    }
 }

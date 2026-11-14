@@ -53,7 +53,33 @@ namespace LevelBuilder
             defaultMaterial = EditorDefaultMaterial();
             if (isActiveAndEnabled) B.MarkDirty(); // re-skin already generated parts (deferred)
         }
+
+        // Material fields edited in the inspector: re-skin (deferred; OnValidate cannot rebuild objects).
+        void OnValidate()
+        {
+            if (isActiveAndEnabled && B != null) B.MarkDirty();
+        }
 #endif
+
+        /// <summary>
+        /// The generated <see cref="Door"/> of a valid door opening, or null (unknown id, not a door, invalid opening,
+        /// not generated yet). Generated doors are rebuilt whenever the building regenerates: look the door up again
+        /// instead of caching it (the id is shown in the Building inspector, "Copiar id").
+        /// </summary>
+        public Door FindDoor(string openingId)
+        {
+            if (string.IsNullOrEmpty(openingId)) return null;
+            for (int c = 0; c < transform.childCount; c++)
+            {
+                var floor = transform.GetChild(c);
+                if (!IsGeneratedFloor(floor, out _)) continue;
+                var doors = floor.Find("Doors");
+                var t = doors != null ? doors.Find(openingId) : null;
+                var door = t != null ? t.GetComponent<Door>() : null;
+                if (door != null) return door;
+            }
+            return null;
+        }
 
         // Last resort when no material was serialized (e.g. component added from code in a player).
         static Material DefaultMaterial()
@@ -420,6 +446,9 @@ namespace LevelBuilder
                     if (mf.sharedMesh != null && (mf.sharedMesh.hideFlags & HideFlags.DontSave) == HideFlags.DontSave)
                         DestroyObj(mf.sharedMesh);
             }
+            // Object.Destroy is deferred to the end of the frame: rename so the dying floor is no longer a generated
+            // floor (FindDoor, RemoveGenerated) in the meantime.
+            if (Application.isPlaying) root.name = "Destroyed Floor";
             DestroyObj(root);
         }
 

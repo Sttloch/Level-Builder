@@ -35,5 +35,12 @@ namespace LevelBuilder
         }
 
         void OnValidate() => MarkDirty();
+
+        /// <summary>The generated door of the opening with this id, or null. See <see cref="BuildingRenderer.FindDoor"/>.</summary>
+        public Door FindDoor(string openingId)
+        {
+            var r = GetComponent<BuildingRenderer>();
+            return r != null ? r.FindDoor(openingId) : null;
+        }
     }
 }

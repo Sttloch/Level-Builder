@@ -68,22 +68,45 @@ namespace LevelBuilder.Tests
             Assert.AreEqual(-1, m.Direction);
         }
 
-        [Test] public void Door_Swing_RotatesLeafAroundHinge()
-        {
-            var d = Make(new DoorSettings());
-            var hingeBefore = d.leaf.TransformPoint(new Vector3(-0.45f, 0, 0));
-            d.Open();
-            d.Tick(1f);
-            Assert.AreEqual(95f, Quaternion.Angle(Quaternion.identity, d.leaf.localRotation), 1e-2f);
-            Assert.AreEqual(95f, d.leaf.localRotation.eulerAngles.y, 1e-2f);
-            var hingeAfter = d.leaf.TransformPoint(new Vector3(-0.45f, 0, 0));
-            Assert.AreEqual(0f, Vector3.Distance(hingeBefore, hingeAfter), 1e-4f);
-        }
+        // Hinge edge in leaf-local x: hingeOnRight = right of a viewer on the door's +Z (R) side facing the wall,
+        // i.e. door-local -X; hinge on the left = +X.
+        static float HingeX(bool hingeRight) => hingeRight ? -0.45f : 0.45f;
 
         float FreeEdgeZ(Door d, bool hingeRight)
         {
-            var p = d.leaf.TransformPoint(new Vector3(hingeRight ? -0.45f : 0.45f, 0, 0));
+            var p = d.leaf.TransformPoint(new Vector3(-HingeX(hingeRight), 0, 0));
             return d.transform.InverseTransformPoint(p).z;
+        }
+
+        [Test] public void Door_Swing_RotatesLeafAroundHinge()
+        {
+            var d = Make(new DoorSettings());
+            var hingeBefore = d.leaf.TransformPoint(new Vector3(HingeX(false), 0, 0));
+            d.Open();
+            d.Tick(1f);
+            Assert.AreEqual(95f, Quaternion.Angle(Quaternion.identity, d.leaf.localRotation), 1e-2f);
+            var hingeAfter = d.leaf.TransformPoint(new Vector3(HingeX(false), 0, 0));
+            Assert.AreEqual(0f, Vector3.Distance(hingeBefore, hingeAfter), 1e-4f);
+            Assert.Less(FreeEdgeZ(d, false), -0.1f); // Open() with no position swings toward -Z (away from the R side)
+        }
+
+        // A viewer on the +Z side facing the wall looks along -Z: their right is -X (Unity is left-handed).
+        [Test] public void Door_HingeOnRight_IsRightOfViewerOnRSide()
+        {
+            foreach (bool right in new[] { true, false })
+            {
+                var d = Make(new DoorSettings { hingeOnRight = right, bothWays = false });
+                var minus = d.leaf.TransformPoint(new Vector3(-0.45f, 0, 0));
+                var plus = d.leaf.TransformPoint(new Vector3(0.45f, 0, 0));
+                d.Open();
+                d.Tick(1f);
+                float movedMinus = Vector3.Distance(minus, d.leaf.TransformPoint(new Vector3(-0.45f, 0, 0)));
+                float movedPlus = Vector3.Distance(plus, d.leaf.TransformPoint(new Vector3(0.45f, 0, 0)));
+                if (right) { Assert.AreEqual(0f, movedMinus, 1e-4f); Assert.Greater(movedPlus, 0.5f); }
+                else { Assert.AreEqual(0f, movedPlus, 1e-4f); Assert.Greater(movedMinus, 0.5f); }
+                Assert.Less(FreeEdgeZ(d, right), -0.1f, "one-way doors swing toward -Z");
+                Object.DestroyImmediate(_go);
+            }
         }
 
         [Test] public void Door_BothWays_OpensAwayFromPosition()
@@ -104,6 +127,12 @@ namespace LevelBuilder.Tests
             d.Open(d.transform.TransformPoint(new Vector3(0, 0, 2)));
             d.Tick(1f);
             Assert.Less(FreeEdgeZ(d, true), -0.1f);
+            Object.DestroyImmediate(_go);
+
+            d = Make(new DoorSettings { bothWays = true, hingeOnRight = true });
+            d.Open(d.transform.TransformPoint(new Vector3(0, 0, -2)));
+            d.Tick(1f);
+            Assert.Greater(FreeEdgeZ(d, true), 0.1f);
         }
 
         [Test] public void Door_Sliding_MovesLeaf()
@@ -113,6 +142,29 @@ namespace LevelBuilder.Tests
             d.Open();
             d.Tick(1f);
             Assert.AreEqual(0.855f, Mathf.Abs(d.leaf.localPosition.x - x0), 1e-4f);
+            // Slides from the hinge side toward the free edge: hinge on the left (+X) -> moves toward -X.
+            Assert.Less(d.leaf.localPosition.x - x0, 0f);
+            Object.DestroyImmediate(_go);
+
+            d = Make(new DoorSettings { kind = DoorKind.Sliding, hingeOnRight = true });
+            x0 = d.leaf.localPosition.x;
+            d.Open();
+            d.Tick(1f);
+            Assert.AreEqual(0.855f, d.leaf.localPosition.x - x0, 1e-4f);
+        }
+
+        [Test] public void Door_NegativeSpeed_ProgressStaysInRange()
+        {
+            var m = new DoorMotion();
+            m.Open(1);
+            m.Step(0.5f, -2f, out _, out _);
+            Assert.That(m.Progress, Is.InRange(0f, 1f));
+
+            var d = Make(new DoorSettings { speed = -2f });
+            d.Open();
+            d.Tick(0.5f);
+            Assert.AreEqual(0f, Quaternion.Angle(Quaternion.identity, d.leaf.localRotation), 1e-3f,
+                "leaf must not rotate past closed");
         }
 
         [Test] public void Door_EventsFire()
@@ -261,6 +313,68 @@ namespace LevelBuilder.Tests
 
             d.HandleEnter(Occupant("Untagged"));
             Assert.IsTrue(d.IsOpen);
+        }
+
+        [Test] public void Door_Interact_OpensAwayFromOccupant()
+        {
+            foreach (float z in new[] { 2f, -2f })
+            {
+                var d = Make(new DoorSettings { activation = DoorActivation.Interact, bothWays = true });
+                d.EnsureTrigger();
+                d.interactSource = _ => true;
+                var a = Occupant();
+                a.transform.position = d.transform.TransformPoint(new Vector3(0, 0, z));
+                d.HandleEnter(a);
+                d.Poll();
+                Assert.IsTrue(d.IsOpen);
+                d.Tick(1f);
+                if (z > 0f) Assert.Less(FreeEdgeZ(d, false), -0.1f, "occupant in front -> opens to the back");
+                else Assert.Greater(FreeEdgeZ(d, false), 0.1f, "occupant behind -> opens to the front");
+                d.Poll();
+                Assert.IsFalse(d.IsOpen, "second press closes");
+                Object.DestroyImmediate(_go);
+            }
+        }
+
+        [Test] public void Door_Proximity_AcceptsTagOnAttachedRigidbody()
+        {
+            var d = Prox();
+            var player = new GameObject("player");
+            player.tag = "Player";
+            _extras.Add(player);
+            player.AddComponent<Rigidbody>().isKinematic = true;
+            var part = new GameObject("part"); // untagged child collider of the tagged body
+            part.transform.SetParent(player.transform, false);
+            var col = part.AddComponent<BoxCollider>();
+            Assume.That(col.attachedRigidbody, Is.Not.Null);
+            d.HandleEnter(col);
+            Assert.IsTrue(d.IsOpen);
+        }
+
+        [Test] public void Door_LockedProximity_UnlockWithOccupantInsideOpens()
+        {
+            var d = Make(new DoorSettings { activation = DoorActivation.Proximity, locked = true });
+            d.EnsureTrigger();
+            var a = Occupant();
+            a.transform.position = d.transform.TransformPoint(new Vector3(0, 0, -2));
+            d.HandleEnter(a);
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
+            d.Unlock();
+            Assert.IsTrue(d.IsOpen);
+            d.Tick(1f);
+            Assert.Greater(FreeEdgeZ(d, false), 0.1f, "opens away from the occupant");
+        }
+
+        [Test] public void Door_HandleEnter_CountsAsHadOccupant()
+        {
+            var d = Prox();
+            var a = Occupant();
+            d.HandleEnter(a);
+            Assert.IsTrue(d.IsOpen);
+            Object.DestroyImmediate(a.gameObject); // gone before any Poll ran
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
         }
     }
 }

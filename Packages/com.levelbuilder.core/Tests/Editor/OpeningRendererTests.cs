@@ -218,6 +218,58 @@ public class OpeningRendererTests
         Assert.AreEqual(0, original);
     }
 
+    [Test] public void FindDoor_ReturnsGeneratedDoorOrNull()
+    {
+        var s = Square(out var f);
+        var o = AddDoor(f, s, 1.2f);
+        var w = AddWindow(f, s, 3f);
+        var bad = AddDoor(f, b.data.floors[0].segments[1], 0.1f); // into the corner joint: invalid
+        r.Regenerate();
+
+        var door = r.FindDoor(o.id);
+        Assert.IsNotNull(door);
+        Assert.AreSame(go.transform.Find("Floor 0/Doors/" + o.id).GetComponent<Door>(), door);
+        Assert.AreSame(door, b.FindDoor(o.id));
+        Assert.IsNull(r.FindDoor(w.id), "a window is not a door");
+        Assert.IsNull(r.FindDoor(bad.id), "invalid openings generate nothing");
+        Assert.IsNull(r.FindDoor("unknown"));
+        Assert.IsNull(r.FindDoor(null));
+        Assert.IsNull(r.FindDoor(""));
+
+        r.Regenerate();
+        var again = r.FindDoor(o.id);
+        Assert.IsNotNull(again);
+        Assert.AreNotSame(door, again);
+        Assert.IsTrue(door == null, "the previous door was destroyed");
+    }
+
+    // South wall (0,0)->(4,0): its R face looks to -Z, so the R-side viewer stands at z < 0 looking toward +Z and
+    // has +X on their right. hingeOnRight -> the leaf edge that stays put while opening is at world x > 2.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void HingeOnRight_IsRightOfViewerOnRFace(bool right)
+    {
+        var s = Square(out var f);
+        var o = AddDoor(f, s);
+        o.door.hingeOnRight = right;
+        o.door.bothWays = false;
+        r.Regenerate();
+        var door = go.transform.Find("Floor 0/Doors/" + o.id).GetComponent<Door>();
+        float half = door.leafSize.x * 0.5f;
+        var e0 = door.leaf.TransformPoint(new Vector3(-half, 0f, 0f));
+        var e1 = door.leaf.TransformPoint(new Vector3(half, 0f, 0f));
+        door.Open();
+        door.Tick(10f);
+        bool e0Fixed = Vector3.Distance(e0, door.leaf.TransformPoint(new Vector3(-half, 0f, 0f))) < 1e-4f;
+        bool e1Fixed = Vector3.Distance(e1, door.leaf.TransformPoint(new Vector3(half, 0f, 0f))) < 1e-4f;
+        Assert.AreNotEqual(e0Fixed, e1Fixed, "exactly one edge is the hinge");
+        var hinge = e0Fixed ? e0 : e1;
+        if (right) Assert.Greater(hinge.x, 2.3f);
+        else Assert.Less(hinge.x, 1.7f);
+        // The opening tool's hinge marker sits on the same edge (u = x on this wall; the leaf is 1 cm inset).
+        Assert.AreEqual(LevelBuilder.Editor.OpeningPlacement.HingeU(o), hinge.x, 0.02f);
+    }
+
     static int DontSaveMeshes() =>
         Resources.FindObjectsOfTypeAll<Mesh>().Count(m => (m.hideFlags & HideFlags.DontSave) == HideFlags.DontSave);
 

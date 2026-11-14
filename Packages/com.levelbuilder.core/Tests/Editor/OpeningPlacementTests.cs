@@ -130,4 +130,63 @@ public class OpeningPlacementTests
         Assert.AreEqual(1, openings.Count);
         Assert.AreEqual(placed.id, openings[0].id);
     }
+
+    [Test] public void ApplyType_DoorHasNoSill_WindowAndEmptyKeepIt()
+    {
+        var o = new WallOpening { type = OpeningType.Window, center = 3f, width = 1.2f, height = 1.2f, sill = 0.9f };
+        OpeningPlacement.ApplyType(o, OpeningType.Empty);
+        Assert.AreEqual(OpeningType.Empty, o.type);
+        Assert.AreEqual(0.9f, o.sill, 1e-6f);
+        OpeningPlacement.ApplyType(o, OpeningType.Door);
+        Assert.AreEqual(OpeningType.Door, o.type);
+        Assert.AreEqual(0f, o.sill);
+        Assert.AreEqual(1.2f, o.height, 1e-6f);
+        Assert.IsTrue(OpeningPlacement.HasSill(OpeningType.Window));
+        Assert.IsTrue(OpeningPlacement.HasSill(OpeningType.Empty));
+        Assert.IsFalse(OpeningPlacement.HasSill(OpeningType.Door));
+    }
+
+    [Test] public void SetType_WindowToDoor_SitsOnFloor_OneUndoStep()
+    {
+        go = BuildingMenu.CreateBuilding(null);
+        var b = go.GetComponent<Building>();
+        var south = Rect6x4(b.data, out var f);
+        var o = b.data.AddOpening(f, south.id,
+            new WallOpening { type = OpeningType.Window, center = 3f, width = 1.2f, height = 1.2f, sill = 0.9f });
+        Undo.ClearAll();
+        Undo.IncrementCurrentGroup();
+
+        Assert.IsTrue(OpeningPlacement.SetType(b, 0, o.id, OpeningType.Door));
+        var now = b.data.FindOpening(b.data.floors[0], o.id).o;
+        Assert.AreEqual(OpeningType.Door, now.type);
+        Assert.AreEqual(0f, now.sill);
+
+        Undo.PerformUndo();
+        now = b.data.FindOpening(b.data.floors[0], o.id).o;
+        Assert.AreEqual(OpeningType.Window, now.type);
+        Assert.AreEqual(0.9f, now.sill, 1e-6f);
+        Assert.IsFalse(OpeningPlacement.SetType(b, 0, "missing", OpeningType.Door));
+    }
+
+    [Test] public void Remove_IsOneUndoStep()
+    {
+        go = BuildingMenu.CreateBuilding(null);
+        var b = go.GetComponent<Building>();
+        var south = Rect6x4(b.data, out _);
+        string segId = south.id;
+        var o = b.data.AddOpening(b.data.floors[0], segId, Door(3f));
+        Undo.ClearAll();
+        Undo.IncrementCurrentGroup();
+
+        Assert.IsTrue(OpeningPlacement.Remove(b, 0, o.id));
+        Assert.AreEqual(0, b.data.floors[0].GetSegment(segId).openings.Count);
+        Assert.IsFalse(OpeningPlacement.Remove(b, 0, o.id), "already gone");
+
+        Undo.PerformUndo();
+        var openings = b.data.floors[0].GetSegment(segId).openings;
+        Assert.AreEqual(1, openings.Count);
+        Assert.AreEqual(o.id, openings[0].id);
+        Undo.PerformRedo();
+        Assert.AreEqual(0, b.data.floors[0].GetSegment(segId).openings.Count);
+    }
 }

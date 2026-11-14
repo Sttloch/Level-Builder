@@ -22,7 +22,7 @@ namespace LevelBuilder
 
         public void Close() { _wantOpen = false; }
 
-        /// <summary>Advances by dt; speed = full 0..1 travels per second. Returns true if Progress changed.</summary>
+        /// <summary>Advances by dt; speed = full 0..1 travels per second (negative counts as 0). Returns true if Progress changed.</summary>
         public bool Step(float dt, float speed, out bool justOpened, out bool justClosed)
         {
             justOpened = false;
@@ -31,7 +31,7 @@ namespace LevelBuilder
             if (Mathf.Approximately(Progress, target)) return false;
 
             float before = Progress;
-            Progress = Mathf.MoveTowards(Progress, target, Mathf.Max(0f, dt) * speed);
+            Progress = Mathf.MoveTowards(Progress, target, Mathf.Max(0f, dt) * Mathf.Max(0f, speed));
             if (Progress >= 1f && before < 1f) justOpened = true;
             if (Progress <= 0f && before > 0f) justClosed = true;
             return !Mathf.Approximately(before, Progress);
