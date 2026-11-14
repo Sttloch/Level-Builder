@@ -39,11 +39,33 @@ namespace LevelBuilder.Geometry
         public static MeshData Build(FloorData f, float baseY)
         {
             var md = new MeshData();
+            var info = SolveJoins(md, f, baseY);
+            foreach (var s in f.segments) BuildSegment(md, f, s, info, baseY);
+            return md;
+        }
+
+        /// <summary>
+        /// Per built segment id, the distance along the wall from its start / end node beyond which no
+        /// band corner of the joint reaches (the same EndInfo.cut that Build uses). Segments the builder
+        /// skips (missing nodes, zero length, height &lt;= 0) are absent.
+        /// </summary>
+        public static Dictionary<string, (float start, float end)> ComputeCuts(FloorData f)
+        {
+            var info = SolveJoins(new MeshData(), f, 0f);
+            var cuts = new Dictionary<string, (float start, float end)>();
+            foreach (var s in f.segments)
+                if (info.TryGetValue((s.id, true), out var si) && info.TryGetValue((s.id, false), out var ei))
+                    cuts[s.id] = (si.cut, ei.cut);
+            return cuts;
+        }
+
+        /// <summary>Solves every node's joint, emitting node geometry into md and returning the per-end info.</summary>
+        static Dictionary<(string, bool), EndInfo> SolveJoins(MeshData md, FloorData f, float baseY)
+        {
             var byNode = WallJoins.CollectEnds(f, out var nodePos);
             var info = new Dictionary<(string, bool), EndInfo>();
             foreach (var kv in byNode) BuildNode(md, f, kv.Key, nodePos[kv.Key], kv.Value, baseY, info);
-            foreach (var s in f.segments) BuildSegment(md, f, s, info, baseY);
-            return md;
+            return info;
         }
 
         // ---------- nodes ----------
