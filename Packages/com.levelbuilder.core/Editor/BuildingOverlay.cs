@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace LevelBuilder.Editor
 {
-    /// <summary>Scene view panel shown while a Building is selected: active floor, add/remove floor, height, wall and opening tools.</summary>
+    /// <summary>Scene view panel shown while a Building is selected: active floor, add/remove floor, height, wall, opening and stair tools.</summary>
     [Overlay(typeof(SceneView), "levelbuilder-building", "Level Builder")]
     public class BuildingOverlay : IMGUIOverlay, ITransientOverlay
     {
@@ -66,7 +66,30 @@ namespace LevelBuilder.Editor
                         "Ctrl: sin rejilla. Shift: ángulos de 15°. Supr: borrar selección.", MessageType.None);
 
                 DrawOpeningRow();
+                DrawStairRow(b);
             }
+        }
+
+        static void DrawStairRow(Building b)
+        {
+            bool active = ToolManager.activeToolType == typeof(StairTool);
+            bool want = GUILayout.Toggle(active, "Escalera", "Button");
+            if (want != active)
+            {
+                if (want) ToolManager.SetActiveTool<StairTool>();
+                else ToolManager.RestorePreviousPersistentTool();
+            }
+            if (!active) return;
+            int fi = BuildingEditorUtil.ActiveFloorIndex(b);
+            if (fi < 0 || fi + 1 >= b.data.floors.Count)
+                EditorGUILayout.HelpBox(StairIssueText.NoFloorAboveHelp, MessageType.Info);
+            else
+                EditorGUILayout.HelpBox(
+                    "Clic: punto (esquina). Shift+clic: punto de curva. Retroceso: quitar último.\n" +
+                    "Enter / doble clic: terminar. Esc: cancelar. Ctrl: sin rejilla.\n" +
+                    "Clic en escalera: seleccionar. Arrastrar punto: mover. Punto amarillo lateral: ancho.\n" +
+                    "Supr: quitar el punto seleccionado o, sin punto, borrar la escalera. Rojo: problema (motivo en la etiqueta).",
+                    MessageType.None);
         }
 
         static readonly (OpeningType type, string label)[] OpeningModes =
@@ -111,6 +134,7 @@ namespace LevelBuilder.Editor
             if (PrefabUtility.IsPartOfPrefabInstance(b)) PrefabUtility.RecordPrefabInstancePropertyModifications(b);
             WallSelection.Clear();
             OpeningSelection.Clear();
+            StairSelection.Clear();
             SceneView.RepaintAll();
         }
 
@@ -134,6 +158,7 @@ namespace LevelBuilder.Editor
             });
             WallSelection.Clear();
             OpeningSelection.Clear();
+            StairSelection.Validate();
         }
 
         internal static void SetFloorHeight(Building b, int index, float height)

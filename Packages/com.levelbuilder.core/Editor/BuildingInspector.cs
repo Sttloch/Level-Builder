@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace LevelBuilder.Editor
 {
-    /// <summary>Inspector for Building: floor list, selected segment thickness, node unlinking and the selected opening.</summary>
+    /// <summary>Inspector for Building: floor list, selected segment thickness, node unlinking, the selected opening and the selected stair.</summary>
     [CustomEditor(typeof(Building))]
     public class BuildingInspector : UnityEditor.Editor
     {
@@ -15,16 +15,31 @@ namespace LevelBuilder.Editor
         Dictionary<string, List<OpeningRect>> openingLayout;
         FloorData openingLayoutFloor;
 
+        // Stair whose "Arreglar automáticamente" found nothing; cleared by any change of selection or data.
+        string autoFixFailedStairId;
+        StairValidation stairValidation;
+        string stairValidationId;
+
         void OnEnable()
         {
             WallSelection.Changed += Repaint;
             OpeningSelection.Changed += Repaint;
+            StairSelection.Changed += OnStairSelectionChanged;
+            Undo.undoRedoPerformed += OnStairSelectionChanged;
         }
 
         void OnDisable()
         {
             WallSelection.Changed -= Repaint;
             OpeningSelection.Changed -= Repaint;
+            StairSelection.Changed -= OnStairSelectionChanged;
+            Undo.undoRedoPerformed -= OnStairSelectionChanged;
+        }
+
+        void OnStairSelectionChanged()
+        {
+            autoFixFailedStairId = null;
+            Repaint();
         }
 
         public override void OnInspectorGUI()
@@ -99,6 +114,7 @@ namespace LevelBuilder.Editor
             }
 
             DrawOpeningSection(b);
+            DrawStairSection(b);
 
             EditorGUILayout.Space();
             showRaw = EditorGUILayout.Foldout(showRaw, "Datos (avanzado)");
@@ -175,6 +191,117 @@ namespace LevelBuilder.Editor
                 OpeningSelection.Clear();
                 GUIUtility.ExitGUI();
             }
+        }
+
+        void DrawStairSection(Building b)
+        {
+            if (Event.current.type == EventType.Layout) StairSelection.Validate();
+            var s = StairSelection.Find(b);
+            if (s == null) return;
+            var data = b.data;
+            int from = data.FloorIndex(s.fromFloorId);
+            string sid = s.id;
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Escalera seleccionada", EditorStyles.boldLabel);
+
+            StairFloat(b, from, sid, "Ancho", "Ancho de escalera", s.width, (st, v) => st.width = v, "Entre 0.6 y 3 m.");
+            StairFloat(b, from, sid, "Contrahuella objetivo", "Contrahuella de escalera", s.riserTarget, (st, v) => st.riserTarget = v,
+                "Altura de escalón deseada (0.12–0.20 m). La real reparte la altura de la planta en escalones iguales.");
+            StairFloat(b, from, sid, "Huella", "Huella de escalera", s.tread, (st, v) => st.tread = v, "Fondo de cada escalón (0.25–0.32 m).");
+            StairToggle(b, from, sid, "Barandilla izquierda", "Barandilla de escalera", s.railLeft, (st, v) => st.railLeft = v);
+            StairToggle(b, from, sid, "Barandilla derecha", "Barandilla de escalera", s.railRight, (st, v) => st.railRight = v);
+            StairToggle(b, from, sid, "Rampa de colisión", "Rampa de escalera", s.collisionRamp, (st, v) => st.collisionRamp = v,
+                "Una rampa invisible hace de suelo al subir y bajar; los escalones no tienen colisión propia.");
+
+            // Validated here once per Layout pass, so the panel is current right after an edit (the renderer's
+            // StairValidations only catch up at its next regeneration).
+            if (stairValidation == null || stairValidationId != sid || Event.current.type == EventType.Layout)
+            {
+                stairValidation = StairValidator.Validate(data, s);
+                stairValidationId = sid;
+            }
+            var v0 = stairValidation;
+            var L = v0.layout;
+            bool ok = L != null && L.ok;
+            EditorGUILayout.LabelField("Escalones", ok ? L.risers.ToString() : "—");
+            EditorGUILayout.LabelField("Contrahuella real", ok ? L.riser.ToString("0.000") + " m" : "—");
+            EditorGUILayout.LabelField("Longitud", ok ? L.runLength.ToString("0.00") + " m" : "—");
+
+            int pi = StairSelection.pointIndex;
+            if (pi >= 0 && pi < s.route.Count)
+            {
+                EditorGUILayout.LabelField("Punto seleccionado", (pi + 1) + " de " + s.route.Count);
+                int kind = s.route[pi].kind == StairPointKind.Smooth ? 1 : 0;
+                EditorGUI.BeginChangeCheck();
+                int nk = EditorGUILayout.Popup("Tipo de punto", kind, new[] { "Esquina", "Curva" });
+                if (EditorGUI.EndChangeCheck() && nk != kind)
+                {
+                    var k = nk == 1 ? StairPointKind.Smooth : StairPointKind.Corner;
+                    BuildingEditorUtil.Mutate(b, "Tipo de punto de escalera", from, () => data.SetStairPointKind(sid, pi, k));
+                    autoFixFailedStairId = null;
+                }
+            }
+
+            if (!v0.Valid)
+            {
+                EditorGUILayout.HelpBox(StairIssueText.Join(v0.issues), MessageType.Warning);
+                if (GUILayout.Button("Arreglar automáticamente"))
+                {
+                    if (StairAutoFix.TryFix(data, s, out var route))
+                    {
+                        BuildingEditorUtil.Mutate(b, "Arreglar escalera", from, () =>
+                        {
+                            var st = data.FindStair(sid);
+                            if (st == null) return;
+                            st.route.Clear();
+                            st.route.AddRange(route);
+                        });
+                        autoFixFailedStairId = null;
+                        StairSelection.Validate();
+                    }
+                    else autoFixFailedStairId = sid;
+                }
+                if (autoFixFailedStairId == sid)
+                    EditorGUILayout.HelpBox("No se encontró un arreglo automático", MessageType.Info);
+            }
+
+            if (GUILayout.Button("Borrar escalera"))
+            {
+                BuildingEditorUtil.Mutate(b, "Borrar escalera", from, () => data.RemoveStair(sid));
+                StairSelection.Clear();
+                GUIUtility.ExitGUI();
+            }
+        }
+
+        void StairFloat(Building b, int from, string sid, string label, string undoName, float value,
+            System.Action<StairData, float> set, string tooltip)
+        {
+            EditorGUI.BeginChangeCheck();
+            float v = EditorGUILayout.DelayedFloatField(new GUIContent(label, tooltip), value);
+            if (!EditorGUI.EndChangeCheck() || float.IsNaN(v) || float.IsInfinity(v)) return; // NaN would pass ClampStair
+            BuildingEditorUtil.Mutate(b, undoName, from, () =>
+            {
+                var st = b.data.FindStair(sid);
+                if (st == null) return;
+                set(st, v);
+                BuildingData.ClampStair(st);
+            });
+            autoFixFailedStairId = null;
+        }
+
+        void StairToggle(Building b, int from, string sid, string label, string undoName, bool value,
+            System.Action<StairData, bool> set, string tooltip = null)
+        {
+            EditorGUI.BeginChangeCheck();
+            bool v = EditorGUILayout.Toggle(new GUIContent(label, tooltip), value);
+            if (!EditorGUI.EndChangeCheck()) return;
+            BuildingEditorUtil.Mutate(b, undoName, from, () =>
+            {
+                var st = b.data.FindStair(sid);
+                if (st != null) set(st, v);
+            });
+            autoFixFailedStairId = null;
         }
 
         static void DrawDoor(SerializedProperty door)

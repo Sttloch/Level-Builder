@@ -7,7 +7,7 @@ using UnityEngine;
 namespace LevelBuilder.Editor
 {
     /// <summary>Shared helpers for the building editor tools: plan/world conversion and undoable mutations.</summary>
-    static class BuildingEditorUtil
+    public static class BuildingEditorUtil
     {
         public static int ActiveFloorIndex(Building b)
         {
@@ -149,6 +149,50 @@ namespace LevelBuilder.Editor
         {
             if (openingId == null) return;
             if (building == null || Find(building).o == null) Clear();
+        }
+    }
+
+    /// <summary>
+    /// Stair picked with the stair tool, and optionally one of its route points (pointIndex, -1 = none).
+    /// Editor-session state, never serialized. Cleared when the stair no longer exists (deleted, or gone after
+    /// Undo/Redo); pointIndex is reset when it falls outside the route.
+    /// </summary>
+    [InitializeOnLoad]
+    static class StairSelection
+    {
+        public static Building building;
+        public static string stairId;
+        public static int pointIndex = -1;
+
+        public static event Action Changed;
+
+        static StairSelection()
+        {
+            Undo.undoRedoPerformed += Validate;
+        }
+
+        public static void Select(Building b, string id, int point = -1)
+        {
+            if (building == b && stairId == id && pointIndex == point) return;
+            building = b;
+            stairId = id;
+            pointIndex = id == null ? -1 : point;
+            Changed?.Invoke();
+        }
+
+        public static void Clear() => Select(null, null);
+
+        /// <summary>The selected stair on b, or null.</summary>
+        public static StairData Find(Building b) =>
+            b != null && b == building && b.data != null && stairId != null ? b.data.FindStair(stairId) : null;
+
+        /// <summary>Clears the selection if its building or stair is gone; drops a point index out of range.</summary>
+        public static void Validate()
+        {
+            if (stairId == null) return;
+            var s = building != null ? Find(building) : null;
+            if (s == null) { Clear(); return; }
+            if (pointIndex >= s.route.Count) Select(building, stairId, -1);
         }
     }
 

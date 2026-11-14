@@ -1,0 +1,24 @@
+# Plan 3 — Verificación manual en Unity (escaleras)
+
+Pendiente. Hacer en Unity 6000.0.47f1 con `Assets/Dev/Sandbox.unity`. Los tests automáticos no cubren la interacción en la vista de escena ni el modo Play.
+
+Preparación: crea un edificio (`GameObject > Level Builder > Building`), dibuja un rectángulo de 10×8 con un muro interior y pulsa **+ Planta** (la planta 1 copia el contorno exterior). Vuelve a la planta 0 como planta activa.
+
+1. Herramienta (overlay, botón **Escalera**):
+   - Al pulsarlo se activa la herramienta Escaleras y se desmarcan "Dibujar paredes" y los botones de aberturas (y al revés). Volver a pulsarlo → vuelve la herramienta anterior.
+   - Con la planta superior activa (sin planta encima) el overlay muestra "Añade una planta encima para crear una escalera", el cursor muestra el mismo texto y los clics en vacío no hacen nada.
+2. Escalera recta: clic en (2, 2), clic en (6, 2), Enter → se crea la escalera (un paso de Undo "Crear escalera") y queda seleccionada. Durante el dibujo se ven las piezas en verde y la etiqueta "Longitud: X.XX m". Los puntos se ajustan a la rejilla de 0.5 m; con Ctrl (Cmd en Mac) sin ajuste. Doble clic también termina. Retroceso quita el último punto; Esc cancela sin crear nada.
+3. Escalera en L (una esquina de 90°) → descansillo cuadrado en la esquina. En U (dos esquinas de 90°) → dos descansillos. Escalera curva: Shift+clic en los puntos intermedios → escalones en abanico sin descansillo.
+4. Ruta corta (p. ej. 1 m) → la escalera se prolonga en la dirección del último tramo; la longitud mostrada es la real. Ruta larga (p. ej. 9 m) → la escalera termina antes del último punto.
+5. "Ruta no válida (giro demasiado cerrado o esquinas demasiado juntas)": aparece con un giro de más de 150° en una sola esquina (para una U usa dos esquinas) o con dos esquinas tan juntas que sus descansillos se solapan. Con giros de 120–150° el descansillo es largo: es lo esperado.
+6. Llegada contra una pared: dibuja la escalera de forma que termine justo delante de un muro de la planta 1 → se dibuja en rojo con "La llegada está bloqueada (pared delante)". En el Inspector, **"Arreglar automáticamente"** → la ruta cambia y la escalera pasa a verde; un Ctrl+Z deshace el arreglo entero ("Arreglar escalera"). Caso sin arreglo (escalera encerrada entre muros sin sitio) → aparece "No se encontró un arreglo automático" y no cambia nada.
+7. Edición (herramienta Escaleras): clic en una escalera la selecciona (amarilla, sección "Escalera seleccionada" en el Inspector). Arrastrar un punto lo mueve y la escalera se regenera durante el arrastre; un Ctrl+Z deshace el arrastre entero. Clic en un punto lo selecciona; Supr lo quita si quedan al menos 2 (con 2 puntos no hace nada). Supr sin punto seleccionado borra la escalera. Esc deselecciona el punto y luego la escalera. El punto amarillo lateral al inicio cambia el ancho (0.6–3 m). Supr/Retroceso nunca borran el edificio.
+8. Mover una pared (herramienta Paredes) encima de la escalera → la escalera se dibuja en rojo ("Los escalones atraviesan una pared"); al quitarla vuelve a verde. Un muro de la planta 1 cruzando el hueco → "El hueco del techo cruza una pared" y no se corta el forjado.
+9. Cambiar la altura de la planta 0 (overlay o Inspector) → cambian el número de escalones, la contrahuella real y el hueco.
+10. Inspector: ancho, contrahuella objetivo, huella, barandillas izquierda/derecha y rampa de colisión regeneran la escalera y se deshacen con Ctrl+Z. Valores fuera de rango se limitan (ancho 0.6–3, contrahuella 0.12–0.20, huella 0.25–0.32). Se muestran escalones, contrahuella real y longitud, el tipo del punto seleccionado (Esquina/Curva) y la lista de problemas. "Borrar escalera" la quita.
+11. Quitar la planta de arriba (**− Planta**) → la escalera desaparece; Ctrl+Z → vuelven la planta y la escalera.
+12. Play con un `CharacterController`: sube y baja la escalera sin engancharse en los escalones (la rampa de colisión hace que los escalones no tengan collider propio: se pisa la rampa invisible), no se queda atrapado arriba al llegar a la planta 1 y las barandillas no bloquean el paso por la escalera. Sin rampa, los escalones sí tienen colisión.
+13. La losa de cubierta (encima de la última planta) nunca tiene agujero; solo se cortan el forjado de la planta de arriba y el techo de la de abajo.
+14. Undo/Redo (Ctrl+Z / Ctrl+Y) de cada edición: crear, mover punto, ancho, quitar punto, tipo de punto, cada campo del Inspector, arreglar, borrar. La selección se limpia si la escalera deja de existir.
+15. Materiales: de momento la escalera usa el material por defecto; los materiales por cara (`stair:{id}/tread`, `/riser`, `/side`, `/landing`, `/rail`) se asignan más adelante (plan 4).
+16. Abre el paquete en Unity 2022.3 y en una versión 6.4+ → compila sin errores ni avisos y las escaleras se generan igual.
