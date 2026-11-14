@@ -1,1 +1,16 @@
 .superpowers/
+
+# Unity
+Library/
+Temp/
+Obj/
+Logs/
+UserSettings/
+Build/
+Builds/
+*.csproj
+*.sln
+.vs/
+.idea/
+MemoryCaptures/
+TestResults/

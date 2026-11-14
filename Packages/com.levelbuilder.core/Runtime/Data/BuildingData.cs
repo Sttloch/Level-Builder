@@ -1,0 +1,422 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+using LevelBuilder.Geometry;
+
+namespace LevelBuilder
+{
+    [Serializable]
+    public class BuildingData
+    {
+        public const float MergeTolerance = 0.01f;
+
+        public List<FloorData> floors = new List<FloorData>();
+
+        /// <summary>
+        /// Raised for every wall split (floor, original segment id, new segment id). The original id stays on
+        /// the start-side half; the new segment is the end-side half. Lets later systems copy per-wall data
+        /// (materials, openings) to the new half. Never serialized.
+        /// </summary>
+        [field: NonSerialized]
+        public event Action<FloorData, string, string> SegmentSplit;
+
+        public FloorData AddFloor()
+        {
+            var f = new FloorData { id = IdUtil.New(), name = "Planta " + floors.Count };
+            if (floors.Count > 0)
+            {
+                var prev = floors[floors.Count - 1];
+                f.elevation = prev.elevation + prev.height;
+                f.height = prev.height;
+                f.slabThickness = prev.slabThickness;
+                CopyExteriorFrom(prev, f);
+            }
+            floors.Add(f);
+            return f;
+        }
+
+        /// <summary>Removes the top floor. The last remaining floor is never removed; returns false then.</summary>
+        public bool RemoveTopFloor()
+        {
+            if (floors.Count <= 1) return false;
+            floors.RemoveAt(floors.Count - 1);
+            return true;
+        }
+
+        /// <summary>Sets a floor's height and restacks the elevations of the floors above it.</summary>
+        public void SetFloorHeight(int index, float height)
+        {
+            if (index < 0 || index >= floors.Count) return;
+            floors[index].height = height;
+            for (int i = index + 1; i < floors.Count; i++)
+                floors[i].elevation = floors[i - 1].elevation + floors[i - 1].height;
+        }
+
+        void CopyExteriorFrom(FloorData below, FloorData f)
+        {
+            var exterior = PlanarFaces.Compute(below).exteriorSegmentIds;
+            var map = new Dictionary<string, WallNode>();
+            WallNode Clone(string belowId)
+            {
+                if (map.TryGetValue(belowId, out var existing)) return existing;
+                var src = below.GetNode(belowId);
+                var n = new WallNode { id = IdUtil.New(), position = src.position, linkedBelowId = src.id };
+                f.nodes.Add(n);
+                map[belowId] = n;
+                return n;
+            }
+            foreach (var s in below.segments)
+            {
+                if (!exterior.Contains(s.id)) continue;
+                if (below.GetNode(s.startNodeId) == null || below.GetNode(s.endNodeId) == null) continue;
+                f.segments.Add(new WallSegment
+                {
+                    id = IdUtil.New(),
+                    startNodeId = Clone(s.startNodeId).id,
+                    endNodeId = Clone(s.endNodeId).id,
+                    thickness = s.thickness,
+                    heightOverride = s.heightOverride
+                });
+            }
+        }
+
+        /// <summary>All nodes connected to nodeId through linkedBelowId links (including itself), across floors.</summary>
+        public IEnumerable<(FloorData floor, WallNode node)> GetLinkedColumn(string nodeId)
+        {
+            var result = new List<(FloorData, WallNode)>();
+            var all = new Dictionary<string, (FloorData floor, WallNode node)>();
+            foreach (var fl in floors)
+                foreach (var n in fl.nodes) all[n.id] = (fl, n);
+            if (!all.ContainsKey(nodeId)) return result;
+            var seen = new HashSet<string> { nodeId };
+            var queue = new Queue<string>();
+            queue.Enqueue(nodeId);
+            while (queue.Count > 0)
+            {
+                var cur = all[queue.Dequeue()];
+                result.Add(cur);
+                if (!string.IsNullOrEmpty(cur.node.linkedBelowId)
+                    && all.ContainsKey(cur.node.linkedBelowId) && seen.Add(cur.node.linkedBelowId))
+                    queue.Enqueue(cur.node.linkedBelowId);
+                foreach (var kv in all)
+                    if (kv.Value.node.linkedBelowId == cur.node.id && seen.Add(kv.Key))
+                        queue.Enqueue(kv.Key);
+            }
+            return result;
+        }
+
+        /// <summary>Breaks the node's link with the floor below and the links of nodes above that reference it.</summary>
+        public void UnlinkNode(FloorData f, string nodeId)
+        {
+            var n = f.GetNode(nodeId);
+            if (n == null) return;
+            n.linkedBelowId = null;
+            ClearLinksTo(nodeId);
+        }
+
+        void ClearLinksTo(string nodeId)
+        {
+            foreach (var fl in floors)
+                foreach (var n in fl.nodes)
+                    if (n.linkedBelowId == nodeId) n.linkedBelowId = null;
+        }
+
+        /// <summary>Reuses a node within tolerance; if p lies on a segment, splits it there; otherwise creates a node.</summary>
+        public WallNode GetOrAddNode(FloorData f, Vector2 p)
+        {
+            var best = NearestNode(f, p, null);
+            if (best != null) return best;
+
+            WallSegment hit = null;
+            float hitD = MergeTolerance;
+            foreach (var s in f.segments)
+            {
+                var a = f.GetNode(s.startNodeId);
+                var b = f.GetNode(s.endNodeId);
+                if (a == null || b == null) continue;
+                float d = Seg2D.DistanceToSegment(p, a.position, b.position, out _);
+                if (d <= hitD) { hitD = d; hit = s; }
+            }
+            if (hit != null) return SplitSegment(f, hit.id, p);
+
+            var node = new WallNode { id = IdUtil.New(), position = p };
+            f.nodes.Add(node);
+            return node;
+        }
+
+        /// <summary>Splits a segment at the projection of p onto it (keeps the wall straight). Both halves keep thickness/height.
+        /// If the projection is within MergeTolerance of an endpoint, returns that endpoint and changes nothing.</summary>
+        public WallNode SplitSegment(FloorData f, string segmentId, Vector2 p)
+        {
+            var s = f.GetSegment(segmentId);
+            if (s == null) return null;
+            var a = f.GetNode(s.startNodeId);
+            var b = f.GetNode(s.endNodeId);
+            Seg2D.DistanceToSegment(p, a.position, b.position, out float t);
+            var at = Vector2.Lerp(a.position, b.position, t);
+            // Never create a node on top of an endpoint (it would leave a zero-length segment).
+            if ((at - a.position).magnitude <= MergeTolerance) return a;
+            if ((at - b.position).magnitude <= MergeTolerance) return b;
+            var node = new WallNode { id = IdUtil.New(), position = at };
+            f.nodes.Add(node);
+            SplitSegmentAt(f, s, node);
+            return node;
+        }
+
+        /// <summary>
+        /// Splits s at an existing node: s keeps its id and becomes start -> node, a new segment node -> end is
+        /// added (same thickness/height) and SegmentSplit is raised. Returns the new half, or null (nothing
+        /// changed) if the node is an endpoint or within MergeTolerance of one.
+        /// </summary>
+        WallSegment SplitSegmentAt(FloorData f, WallSegment s, WallNode node)
+        {
+            var a = f.GetNode(s.startNodeId);
+            var b = f.GetNode(s.endNodeId);
+            if (a == null || b == null || node == a || node == b) return null;
+            if ((node.position - a.position).magnitude <= MergeTolerance
+                || (node.position - b.position).magnitude <= MergeTolerance) return null;
+            var second = new WallSegment
+            {
+                id = IdUtil.New(),
+                startNodeId = node.id,
+                endNodeId = s.endNodeId,
+                thickness = s.thickness,
+                heightOverride = s.heightOverride
+            };
+            s.endNodeId = node.id;
+            f.segments.Add(second);
+            SegmentSplit?.Invoke(f, s.id, second.id);
+            return second;
+        }
+
+        /// <summary>Reverts a split: if the original ends where the added half starts and that node joins nothing
+        /// else, the original is extended to the added half's end and the added half and middle node are removed.
+        /// Returns false (nothing changed) otherwise.</summary>
+        public bool JoinSplit(FloorData f, string originalId, string addedId)
+        {
+            var s = f.GetSegment(originalId);
+            var t = f.GetSegment(addedId);
+            if (s == null || t == null || s.endNodeId != t.startNodeId) return false;
+            string mid = s.endNodeId;
+            if (f.segments.Exists(x => x != s && x != t && (x.startNodeId == mid || x.endNodeId == mid))) return false;
+            s.endNodeId = t.endNodeId;
+            f.segments.Remove(t);
+            DeleteNode(f, mid);
+            return true;
+        }
+
+        public List<WallSegment> AddSegment(FloorData f, Vector2 a, Vector2 b)
+        {
+            var created = new List<WallSegment>();
+            if ((b - a).magnitude < MergeTolerance) return created;
+
+            var na = GetOrAddNode(f, a);
+            var nb = GetOrAddNode(f, b);
+            if (na == nb) return created;
+
+            var ordered = new List<WallNode> { na };
+            ordered.AddRange(SplitNodesAlong(f, na, nb));
+            ordered.Add(nb);
+            for (int i = 0; i < ordered.Count - 1; i++)
+            {
+                var seg = TryCreateSegment(f, ordered[i], ordered[i + 1]);
+                if (seg != null) created.Add(seg);
+            }
+            return created;
+        }
+
+        /// <summary>
+        /// Every node where the straight wall a -> b must be split to keep the floor planar, sorted from a.
+        /// Each proper crossing with another wall first gets a node (the crossed wall is split there, raising
+        /// SegmentSplit); then all nodes lying on the interior of a -> b (crossings, T-junctions from the other
+        /// side, collinear overlaps) are returned. a and b themselves are excluded.
+        /// Shared by AddSegment (new walls) and ResolveNode (moved walls).
+        /// </summary>
+        List<WallNode> SplitNodesAlong(FloorData f, WallNode a, WallNode b)
+        {
+            var crossings = new List<KeyValuePair<WallSegment, Vector2>>();
+            foreach (var s in f.segments)
+            {
+                var sa = f.GetNode(s.startNodeId);
+                var sb = f.GetNode(s.endNodeId);
+                if (sa == null || sb == null) continue;
+                if (Seg2D.Intersect(a.position, b.position, sa.position, sb.position, out var p, out _, out _))
+                    crossings.Add(new KeyValuePair<WallSegment, Vector2>(s, p));
+            }
+            foreach (var c in crossings) NodeOnSegment(f, c.Key, c.Value);
+
+            var found = new List<KeyValuePair<float, WallNode>>();
+            foreach (var n in f.nodes)
+            {
+                if (n == a || n == b) continue;
+                if ((n.position - a.position).magnitude <= MergeTolerance
+                    || (n.position - b.position).magnitude <= MergeTolerance) continue;
+                float d = Seg2D.DistanceToSegment(n.position, a.position, b.position, out float t);
+                if (d <= MergeTolerance) found.Add(new KeyValuePair<float, WallNode>(t, n));
+            }
+            found.Sort((x, y) => x.Key.CompareTo(y.Key));
+            var result = new List<WallNode>(found.Count);
+            foreach (var kv in found) result.Add(kv.Value);
+            return result;
+        }
+
+        /// <summary>A node at p on segment s: reuses a node within tolerance (splitting s there unless it is an
+        /// endpoint), otherwise splits s at p.</summary>
+        WallNode NodeOnSegment(FloorData f, WallSegment s, Vector2 p)
+        {
+            var existing = NearestNode(f, p, null);
+            if (existing == null) return SplitSegment(f, s.id, p);
+            SplitSegmentAt(f, s, existing);
+            return existing;
+        }
+
+        WallNode NearestNode(FloorData f, Vector2 p, WallNode exclude)
+        {
+            WallNode best = null;
+            float bestD = MergeTolerance;
+            foreach (var n in f.nodes)
+            {
+                if (n == exclude) continue;
+                float d = (n.position - p).magnitude;
+                if (d <= bestD) { bestD = d; best = n; }
+            }
+            return best;
+        }
+
+        WallSegment TryCreateSegment(FloorData f, WallNode a, WallNode b)
+        {
+            if (a == b) return null;
+            foreach (var s in f.segments)
+            {
+                if ((s.startNodeId == a.id && s.endNodeId == b.id) || (s.startNodeId == b.id && s.endNodeId == a.id))
+                    return null;
+            }
+            var seg = new WallSegment { id = IdUtil.New(), startNodeId = a.id, endNodeId = b.id };
+            f.segments.Add(seg);
+            return seg;
+        }
+
+        public void MoveNode(FloorData f, string nodeId, Vector2 p)
+        {
+            var n = f.GetNode(nodeId);
+            if (n == null) return;
+            n.position = p;
+            foreach (var (_, linked) in GetLinkedColumn(nodeId)) linked.position = p;
+        }
+
+        /// <summary>
+        /// Restores planarity around a node after it moved (e.g. at the end of a drag): (a) merges it into another
+        /// node within MergeTolerance (segments re-pointed, zero-length and duplicate segments dropped, links kept),
+        /// (b) splits walls it lies on, (c) splits its walls wherever they cross or touch other walls.
+        /// Returns the surviving node, or null if nothing is left of it.
+        /// </summary>
+        public WallNode ResolveNode(FloorData f, string nodeId)
+        {
+            var n = f.GetNode(nodeId);
+            if (n == null) return null;
+            var other = NearestNode(f, n.position, n);
+            if (other != null)
+            {
+                MergeNode(f, n, other);
+                n = other;
+            }
+            SplitWallsThrough(f, n);
+            foreach (var s in f.segments.FindAll(x => x.startNodeId == n.id || x.endNodeId == n.id))
+            {
+                var a = f.GetNode(s.startNodeId);
+                var b = f.GetNode(s.endNodeId);
+                if (a == null || b == null || a == b) continue;
+                SplitWallsThrough(f, a == n ? b : a); // collinear overlap reaching past the far end
+                var cur = s;
+                foreach (var k in SplitNodesAlong(f, a, b))
+                    cur = SplitSegmentAt(f, cur, k) ?? cur;
+            }
+            RemoveDegenerateSegments(f);
+            if (!f.segments.Exists(x => x.startNodeId == n.id || x.endNodeId == n.id))
+            {
+                DeleteNode(f, n.id);
+                return null;
+            }
+            return n;
+        }
+
+        /// <summary>ResolveNode on every floor of the node's linked column (after the column moved together).</summary>
+        public void ResolveLinkedColumn(string nodeId)
+        {
+            foreach (var (fl, node) in new List<(FloorData, WallNode)>(GetLinkedColumn(nodeId)))
+                ResolveNode(fl, node.id);
+        }
+
+        // Re-points from's segments and upper links to into, then removes from. into keeps its own link below
+        // if it has one, otherwise inherits from's.
+        void MergeNode(FloorData f, WallNode from, WallNode into)
+        {
+            foreach (var s in f.segments)
+            {
+                if (s.startNodeId == from.id) s.startNodeId = into.id;
+                if (s.endNodeId == from.id) s.endNodeId = into.id;
+            }
+            if (string.IsNullOrEmpty(into.linkedBelowId)) into.linkedBelowId = from.linkedBelowId;
+            foreach (var fl in floors)
+                foreach (var up in fl.nodes)
+                    if (up.linkedBelowId == from.id) up.linkedBelowId = into.id;
+            f.nodes.Remove(from);
+        }
+
+        // Splits every wall not incident to node that passes within MergeTolerance of it.
+        void SplitWallsThrough(FloorData f, WallNode node)
+        {
+            foreach (var s in f.segments.ToArray())
+            {
+                if (s.startNodeId == node.id || s.endNodeId == node.id) continue;
+                var a = f.GetNode(s.startNodeId);
+                var b = f.GetNode(s.endNodeId);
+                if (a == null || b == null) continue;
+                if (Seg2D.DistanceToSegment(node.position, a.position, b.position, out _) <= MergeTolerance)
+                    SplitSegmentAt(f, s, node);
+            }
+        }
+
+        // Drops zero-length segments and duplicates (same node pair, either direction), keeping the first.
+        static void RemoveDegenerateSegments(FloorData f)
+        {
+            var seen = new HashSet<string>();
+            f.segments.RemoveAll(s =>
+            {
+                if (s.startNodeId == s.endNodeId) return true;
+                string key = string.CompareOrdinal(s.startNodeId, s.endNodeId) < 0
+                    ? s.startNodeId + "|" + s.endNodeId
+                    : s.endNodeId + "|" + s.startNodeId;
+                return !seen.Add(key);
+            });
+        }
+
+        public void RemoveSegment(FloorData f, string segmentId)
+        {
+            var s = f.GetSegment(segmentId);
+            if (s == null) return;
+            f.segments.Remove(s);
+            RemoveIfOrphan(f, s.startNodeId);
+            RemoveIfOrphan(f, s.endNodeId);
+        }
+
+        public void RemoveNode(FloorData f, string nodeId)
+        {
+            var incident = f.segments.FindAll(s => s.startNodeId == nodeId || s.endNodeId == nodeId);
+            foreach (var s in incident) RemoveSegment(f, s.id);
+            DeleteNode(f, nodeId);
+        }
+
+        void DeleteNode(FloorData f, string nodeId)
+        {
+            f.nodes.RemoveAll(n => n.id == nodeId);
+            ClearLinksTo(nodeId);
+        }
+
+        void RemoveIfOrphan(FloorData f, string nodeId)
+        {
+            if (!f.segments.Exists(s => s.startNodeId == nodeId || s.endNodeId == nodeId))
+                DeleteNode(f, nodeId);
+        }
+    }
+}
