@@ -19,9 +19,81 @@ namespace LevelBuilder
             {
                 var prev = floors[floors.Count - 1];
                 f.elevation = prev.elevation + prev.height;
+                f.height = prev.height;
+                f.slabThickness = prev.slabThickness;
+                CopyExteriorFrom(prev, f);
             }
             floors.Add(f);
             return f;
+        }
+
+        void CopyExteriorFrom(FloorData below, FloorData f)
+        {
+            var exterior = PlanarFaces.Compute(below).exteriorSegmentIds;
+            var map = new Dictionary<string, WallNode>();
+            WallNode Clone(string belowId)
+            {
+                if (map.TryGetValue(belowId, out var existing)) return existing;
+                var src = below.GetNode(belowId);
+                var n = new WallNode { id = IdUtil.New(), position = src.position, linkedBelowId = src.id };
+                f.nodes.Add(n);
+                map[belowId] = n;
+                return n;
+            }
+            foreach (var s in below.segments)
+            {
+                if (!exterior.Contains(s.id)) continue;
+                if (below.GetNode(s.startNodeId) == null || below.GetNode(s.endNodeId) == null) continue;
+                f.segments.Add(new WallSegment
+                {
+                    id = IdUtil.New(),
+                    startNodeId = Clone(s.startNodeId).id,
+                    endNodeId = Clone(s.endNodeId).id,
+                    thickness = s.thickness,
+                    heightOverride = s.heightOverride
+                });
+            }
+        }
+
+        /// <summary>All nodes connected to nodeId through linkedBelowId links (including itself), across floors.</summary>
+        public IEnumerable<(FloorData floor, WallNode node)> GetLinkedColumn(string nodeId)
+        {
+            var result = new List<(FloorData, WallNode)>();
+            var all = new Dictionary<string, (FloorData floor, WallNode node)>();
+            foreach (var fl in floors)
+                foreach (var n in fl.nodes) all[n.id] = (fl, n);
+            if (!all.ContainsKey(nodeId)) return result;
+            var seen = new HashSet<string> { nodeId };
+            var queue = new Queue<string>();
+            queue.Enqueue(nodeId);
+            while (queue.Count > 0)
+            {
+                var cur = all[queue.Dequeue()];
+                result.Add(cur);
+                if (!string.IsNullOrEmpty(cur.node.linkedBelowId)
+                    && all.ContainsKey(cur.node.linkedBelowId) && seen.Add(cur.node.linkedBelowId))
+                    queue.Enqueue(cur.node.linkedBelowId);
+                foreach (var kv in all)
+                    if (kv.Value.node.linkedBelowId == cur.node.id && seen.Add(kv.Key))
+                        queue.Enqueue(kv.Key);
+            }
+            return result;
+        }
+
+        /// <summary>Breaks the node's link with the floor below and the links of nodes above that reference it.</summary>
+        public void UnlinkNode(FloorData f, string nodeId)
+        {
+            var n = f.GetNode(nodeId);
+            if (n == null) return;
+            n.linkedBelowId = null;
+            ClearLinksTo(nodeId);
+        }
+
+        void ClearLinksTo(string nodeId)
+        {
+            foreach (var fl in floors)
+                foreach (var n in fl.nodes)
+                    if (n.linkedBelowId == nodeId) n.linkedBelowId = null;
         }
 
         /// <summary>Reuses a node within tolerance; if p lies on a segment, splits it there; otherwise creates a node.</summary>
@@ -139,7 +211,9 @@ namespace LevelBuilder
         public void MoveNode(FloorData f, string nodeId, Vector2 p)
         {
             var n = f.GetNode(nodeId);
-            if (n != null) n.position = p;
+            if (n == null) return;
+            n.position = p;
+            foreach (var (_, linked) in GetLinkedColumn(nodeId)) linked.position = p;
         }
 
         public void RemoveSegment(FloorData f, string segmentId)
@@ -155,13 +229,19 @@ namespace LevelBuilder
         {
             var incident = f.segments.FindAll(s => s.startNodeId == nodeId || s.endNodeId == nodeId);
             foreach (var s in incident) RemoveSegment(f, s.id);
+            DeleteNode(f, nodeId);
+        }
+
+        void DeleteNode(FloorData f, string nodeId)
+        {
             f.nodes.RemoveAll(n => n.id == nodeId);
+            ClearLinksTo(nodeId);
         }
 
         void RemoveIfOrphan(FloorData f, string nodeId)
         {
             if (!f.segments.Exists(s => s.startNodeId == nodeId || s.endNodeId == nodeId))
-                f.nodes.RemoveAll(n => n.id == nodeId);
+                DeleteNode(f, nodeId);
         }
     }
 }
