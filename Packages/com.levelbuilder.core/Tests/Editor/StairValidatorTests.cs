@@ -109,6 +109,77 @@ public class StairValidatorTests
         Assert.Less(after.layout.endDir.y, -0.99f); // right of +x is -y
     }
 
+    static StairValidation ValidateRoute(BuildingData b, StairData s, List<StairPoint> route) =>
+        StairValidator.Validate(b, new StairData { id = s.id, fromFloorId = s.fromFloorId, toFloorId = s.toFloorId, route = route });
+
+    [Test] public void AutoFix_TurnLastFlight_StepA()
+    {
+        // L-route: +x to a corner at (4.5,1.5), then +y; the stair ends at (4.5,3.96).
+        var b = Building();
+        Wall(b, 1, 0, 4.5f, 8, 4.5f); // across the arrival zone (y 3.96..4.96)
+        var s = Stair(b, P(1.5f, 1.5f), P(4.5f, 1.5f), P(4.5f, 5));
+        var before = StairValidator.Validate(b, s);
+        CollectionAssert.AreEqual(Issues(StairIssue.ArrivalBlocked), before.issues);
+
+        Assert.IsTrue(StairAutoFix.TryFix(b, s, out var route));
+        Assert.AreEqual(s.route.Count, route.Count); // last point swung about (4.5,1.5), no corner inserted
+        Assert.AreEqual(new Vector2(4.5f, 1.5f), route[1].position);
+        var after = ValidateRoute(b, s, route);
+        Assert.IsTrue(after.Valid, string.Join(",", after.issues));
+        Assert.AreEqual(0f, Vector2.Dot(after.layout.endDir, before.layout.endDir), 1e-3f);
+    }
+
+    [Test] public void AutoFix_TurnFirstFlight_StepA()
+    {
+        // L-route: -y from (2.8,3) to a corner at (2.8,1.5), then +x.
+        var b = Building();
+        Wall(b, 0, 0, 3.5f, 8, 3.5f); // across the departure zone (y 3..4)
+        var s = Stair(b, P(2.8f, 3), P(2.8f, 1.5f), P(7, 1.5f));
+        var before = StairValidator.Validate(b, s);
+        CollectionAssert.AreEqual(Issues(StairIssue.DepartureBlocked), before.issues);
+
+        Assert.IsTrue(StairAutoFix.TryFix(b, s, out var route));
+        Assert.AreEqual(s.route.Count, route.Count); // first point swung about (2.8,1.5), no corner inserted
+        Assert.AreEqual(new Vector2(2.8f, 1.5f), route[1].position);
+        var after = ValidateRoute(b, s, route);
+        Assert.IsTrue(after.Valid, string.Join(",", after.issues));
+        Assert.AreEqual(0f, Vector2.Dot(after.layout.startDir, before.layout.startDir), 1e-3f);
+    }
+
+    [Test] public void AutoFix_BothSidesValid_PrefersRoomierSide()
+    {
+        // Stair at y=4.1 ends at (5.98,4.1). Turning left (+y) leaves 0.02 m to the exterior wall,
+        // turning right (-y) leaves 0.42 m (to the blocking wall): right must win though left is tried first.
+        var b = Building();
+        Wall(b, 1, 7f, 0, 7f, 6); // footprint 6.9..7.1 cuts the arrival zone (5.98..6.98)
+        var s = Stair(b, P(1.5f, 4.1f), P(6, 4.1f));
+        CollectionAssert.AreEqual(Issues(StairIssue.ArrivalBlocked), StairValidator.Validate(b, s).issues);
+        var left = ValidateRoute(b, s, new List<StairPoint> { P(1.5f, 4.1f), P(5.98f, 4.1f), P(5.98f, 5.1f) });
+        Assert.IsTrue(left.Valid, "left turn should also be valid: " + string.Join(",", left.issues));
+
+        Assert.IsTrue(StairAutoFix.TryFix(b, s, out var route));
+        var after = ValidateRoute(b, s, route);
+        Assert.IsTrue(after.Valid, string.Join(",", after.issues));
+        Assert.Less(after.layout.endDir.y, -0.99f);
+    }
+
+    [Test] public void AutoFix_BothBlocked_FixesArrivalThenDeparture()
+    {
+        var b = Building();
+        Wall(b, 0, 0.8f, 0, 0.8f, 6);    // behind the bottom edge
+        Wall(b, 1, 6.7f, 0, 6.7f, 6);    // in front of the top edge
+        Wall(b, 1, 0, 5f, 6.7f, 5f);     // blocks a left arrival turn
+        var s = Stair(b, P(1.5f, 3.5f), P(6, 3.5f));
+        CollectionAssert.AreEqual(Issues(StairIssue.DepartureBlocked, StairIssue.ArrivalBlocked),
+            StairValidator.Validate(b, s).issues);
+        var original = new List<StairPoint>(s.route);
+
+        Assert.IsTrue(StairAutoFix.TryFix(b, s, out var route));
+        CollectionAssert.AreEqual(original, s.route);
+        var after = ValidateRoute(b, s, route);
+        Assert.IsTrue(after.Valid, string.Join(",", after.issues));
+    }
+
     [Test] public void AutoFix_NoSolution_ReturnsFalse()
     {
         var b = Building();
