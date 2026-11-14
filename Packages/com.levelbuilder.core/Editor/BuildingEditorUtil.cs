@@ -105,6 +105,54 @@ namespace LevelBuilder.Editor
     }
 
     /// <summary>
+    /// Opening picked with the opening tool. Editor-session state, never serialized. Cleared when the opening no
+    /// longer exists (deleted, or gone after Undo/Redo).
+    /// </summary>
+    [InitializeOnLoad]
+    static class OpeningSelection
+    {
+        public static Building building;
+        public static string floorId;
+        public static string openingId;
+
+        public static event Action Changed;
+
+        static OpeningSelection()
+        {
+            Undo.undoRedoPerformed += Validate;
+        }
+
+        public static void Select(Building b, FloorData f, string id) => Set(b, f, id);
+        public static void Clear() => Set(null, null, null);
+
+        static void Set(Building b, FloorData f, string id)
+        {
+            if (building == b && floorId == f?.id && openingId == id) return;
+            building = b;
+            floorId = f?.id;
+            openingId = id;
+            Changed?.Invoke();
+        }
+
+        public static FloorData Floor(Building b) =>
+            b != null && b == building && b.data != null ? b.data.floors.Find(x => x.id == floorId) : null;
+
+        /// <summary>The selected opening and its segment on b, or (null, null).</summary>
+        public static (WallSegment seg, WallOpening o) Find(Building b)
+        {
+            var f = Floor(b);
+            return f == null || openingId == null ? (null, null) : b.data.FindOpening(f, openingId);
+        }
+
+        /// <summary>Clears the selection if its building or opening is gone.</summary>
+        public static void Validate()
+        {
+            if (openingId == null) return;
+            if (building == null || Find(building).o == null) Clear();
+        }
+    }
+
+    /// <summary>
     /// Editor-only display of the active floor: generated renderers of floors above the active one are disabled
     /// while the Building is selected. Never serialized (generated objects are DontSave). Every Building that is
     /// not selected is restored on selection change, after a domain reload and when entering play mode (no

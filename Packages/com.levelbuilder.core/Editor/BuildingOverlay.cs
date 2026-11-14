@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace LevelBuilder.Editor
 {
-    /// <summary>Scene view panel shown while a Building is selected: active floor, add/remove floor, height, wall tool.</summary>
+    /// <summary>Scene view panel shown while a Building is selected: active floor, add/remove floor, height, wall and opening tools.</summary>
     [Overlay(typeof(SceneView), "levelbuilder-building", "Level Builder")]
     public class BuildingOverlay : IMGUIOverlay, ITransientOverlay
     {
@@ -64,7 +64,42 @@ namespace LevelBuilder.Editor
                         "Arrastrar nodo: mover (al soltar se une a nodos / divide paredes).\n" +
                         "Doble clic en pared: dividir. Shift+clic: seleccionar pared.\n" +
                         "Ctrl: sin rejilla. Shift: ángulos de 15°. Supr: borrar selección.", MessageType.None);
+
+                DrawOpeningRow();
             }
+        }
+
+        static readonly (OpeningType type, string label)[] OpeningModes =
+        {
+            (OpeningType.Door, "Puerta"), (OpeningType.Window, "Ventana"), (OpeningType.Empty, "Hueco")
+        };
+
+        static void DrawOpeningRow()
+        {
+            bool toolOn = ToolManager.activeToolType == typeof(OpeningTool);
+            EditorGUILayout.LabelField("Abrir hueco", EditorStyles.miniBoldLabel);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                foreach (var (type, label) in OpeningModes)
+                {
+                    bool on = toolOn && OpeningTool.Type == type;
+                    bool want = GUILayout.Toggle(on, label, "Button");
+                    if (want == on) continue;
+                    if (want) OpeningTool.Activate(type);
+                    else ToolManager.RestorePreviousPersistentTool();
+                }
+            }
+            if (!toolOn) return;
+
+            var presets = OpeningPresets.For(OpeningTool.Type);
+            var names = new string[presets.Count];
+            for (int i = 0; i < names.Length; i++)
+                names[i] = presets[i].name + " (" + presets[i].width.ToString("0.##") + " × " + presets[i].height.ToString("0.##") + ")";
+            OpeningTool.PresetIndex = EditorGUILayout.Popup("Preset", OpeningTool.PresetIndex, names);
+            EditorGUILayout.HelpBox(
+                "Clic en pared: colocar (ajuste a 0.1 m, Ctrl: sin ajuste). Clic en abertura: seleccionar.\n" +
+                "Arrastrar abertura: mover por la pared o a otra. Puntos amarillos: ancho, alto y alféizar.\n" +
+                "Supr: borrar abertura. Esc: deseleccionar. Rojo: no cabe (motivo en la etiqueta).", MessageType.None);
         }
 
         // View state: no Undo entry (it would spam the Undo history). SetDirty so it is still serialized; prefab
@@ -75,6 +110,7 @@ namespace LevelBuilder.Editor
             EditorUtility.SetDirty(b);
             if (PrefabUtility.IsPartOfPrefabInstance(b)) PrefabUtility.RecordPrefabInstancePropertyModifications(b);
             WallSelection.Clear();
+            OpeningSelection.Clear();
             SceneView.RepaintAll();
         }
 
@@ -97,6 +133,7 @@ namespace LevelBuilder.Editor
                 b.activeFloor = Mathf.Clamp(b.activeFloor, 0, b.data.floors.Count - 1);
             });
             WallSelection.Clear();
+            OpeningSelection.Clear();
         }
 
         internal static void SetFloorHeight(Building b, int index, float height)
