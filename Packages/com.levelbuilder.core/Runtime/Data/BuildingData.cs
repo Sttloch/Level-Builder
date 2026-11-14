@@ -11,6 +11,7 @@ namespace LevelBuilder
         public const float MergeTolerance = 0.01f;
 
         public List<FloorData> floors = new List<FloorData>();
+        public List<StairData> stairs = new List<StairData>();
 
         /// <summary>
         /// Raised for every wall split (floor, original segment id, new segment id). The original id stays on
@@ -40,7 +41,81 @@ namespace LevelBuilder
         {
             if (floors.Count <= 1) return false;
             floors.RemoveAt(floors.Count - 1);
+            stairs.RemoveAll(st => FloorIndex(st.fromFloorId) < 0 || FloorIndex(st.toFloorId) < 0);
             return true;
+        }
+
+        /// <summary>Index of the floor with this id, or -1.</summary>
+        public int FloorIndex(string floorId)
+        {
+            for (int i = 0; i < floors.Count; i++)
+                if (floors[i].id == floorId) return i;
+            return -1;
+        }
+
+        public StairData FindStair(string id) => stairs.Find(s => s.id == id);
+
+        /// <summary>Creates a stair from floor fromFloorIndex to the one above. Null if there is no floor above or the route has fewer than 2 points.</summary>
+        public StairData AddStair(int fromFloorIndex, IList<StairPoint> route)
+        {
+            if (fromFloorIndex < 0 || fromFloorIndex + 1 >= floors.Count) return null;
+            if (route == null || route.Count < 2) return null;
+            var s = new StairData
+            {
+                id = IdUtil.New(),
+                fromFloorId = floors[fromFloorIndex].id,
+                toFloorId = floors[fromFloorIndex + 1].id
+            };
+            foreach (var p in route) s.route.Add(p);
+            ClampStair(s);
+            stairs.Add(s);
+            return s;
+        }
+
+        public bool RemoveStair(string id)
+        {
+            var s = FindStair(id);
+            return s != null && stairs.Remove(s);
+        }
+
+        public bool MoveStairPoint(string id, int index, Vector2 p)
+        {
+            var s = FindStair(id);
+            if (s == null || index < 0 || index >= s.route.Count) return false;
+            var pt = s.route[index]; pt.position = p; s.route[index] = pt;
+            return true;
+        }
+
+        /// <summary>Inserts before index (index == Count appends).</summary>
+        public bool InsertStairPoint(string id, int index, StairPoint p)
+        {
+            var s = FindStair(id);
+            if (s == null || index < 0 || index > s.route.Count) return false;
+            s.route.Insert(index, p);
+            return true;
+        }
+
+        public bool RemoveStairPoint(string id, int index)
+        {
+            var s = FindStair(id);
+            if (s == null || index < 0 || index >= s.route.Count || s.route.Count <= 2) return false;
+            s.route.RemoveAt(index);
+            return true;
+        }
+
+        public bool SetStairPointKind(string id, int index, StairPointKind k)
+        {
+            var s = FindStair(id);
+            if (s == null || index < 0 || index >= s.route.Count) return false;
+            var pt = s.route[index]; pt.kind = k; s.route[index] = pt;
+            return true;
+        }
+
+        public static void ClampStair(StairData s)
+        {
+            s.width = Mathf.Clamp(s.width, 0.6f, 3.0f);
+            s.riserTarget = Mathf.Clamp(s.riserTarget, 0.12f, 0.20f);
+            s.tread = Mathf.Clamp(s.tread, 0.25f, 0.32f);
         }
 
         /// <summary>Sets a floor's height and restacks the elevations of the floors above it.</summary>
