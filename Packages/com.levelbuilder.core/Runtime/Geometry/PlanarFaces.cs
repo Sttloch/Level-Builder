@@ -169,7 +169,7 @@ namespace LevelBuilder.Geometry
             if (a != b) p[a] = b;
         }
 
-        static bool PointInPolygon(Vector2 pt, List<Vector2> poly)
+        internal static bool PointInPolygon(Vector2 pt, List<Vector2> poly)
         {
             bool inside = false;
             for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)

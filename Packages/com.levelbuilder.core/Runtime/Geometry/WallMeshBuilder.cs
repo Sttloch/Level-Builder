@@ -7,7 +7,8 @@ namespace LevelBuilder.Geometry
     /// Extrudes a floor's wall graph into a mesh. Plan (x, y) maps to world (x, height, y).
     /// Face keys: "{segmentId}/L", "/R" (sides looking start→end), "/start", "/end" (caps), "/top";
     /// per node: "node:{nodeId}/top" (junction top) and "node:{nodeId}/side" (steps where a junction
-    /// falls back to square ends).
+    /// falls back to square ends); per valid opening: "{openingId}/jamb", "/sill" (raised openings only) and
+    /// "/threshold" (floor-level openings, on the halves of the thickness outside every floor region).
     /// <para>
     /// Walls of different heights meeting at a node are handled in height bands: in the band
     /// [H(k-1), H(k)] only the walls at least H(k) tall take part in the join, so a tall wall is
@@ -40,7 +41,17 @@ namespace LevelBuilder.Geometry
         {
             var md = new MeshData();
             var info = SolveJoins(md, f, baseY);
-            foreach (var s in f.segments) BuildSegment(md, f, s, info, baseY);
+            var layout = OpeningLayout.Compute(f);
+            List<Region> regions = null; // floor regions, only needed for thresholds
+            foreach (var s in f.segments)
+            {
+                var cuts = new List<OpeningRect>();
+                if (layout.TryGetValue(s.id, out var rects))
+                    foreach (var r in rects)
+                        if (r.valid) cuts.Add(r);
+                if (regions == null && cuts.Exists(r => r.v0 <= SameEps)) regions = PlanarFaces.Compute(f).regions;
+                BuildSegment(md, f, s, info, baseY, cuts, regions);
+            }
             return md;
         }
 
@@ -167,7 +178,8 @@ namespace LevelBuilder.Geometry
 
         // ---------- segments ----------
 
-        static void BuildSegment(MeshData md, FloorData f, WallSegment s, Dictionary<(string, bool), EndInfo> info, float baseY)
+        static void BuildSegment(MeshData md, FloorData f, WallSegment s, Dictionary<(string, bool), EndInfo> info, float baseY,
+            List<OpeningRect> openings, List<Region> regions)
         {
             if (!info.TryGetValue((s.id, true), out var si) || !info.TryGetValue((s.id, false), out var ei)) return;
             var A = f.GetNode(s.startNodeId).position;
@@ -177,8 +189,21 @@ namespace LevelBuilder.Geometry
             var n = WallJoins.LeftPerp(d);
             float half = s.thickness * 0.5f;
 
-            AddSide(md, s.id + "/L", SidePolygon(si, ei, A, d, true), A, d, n * half, baseY, n, len);
-            AddSide(md, s.id + "/R", SidePolygon(si, ei, A, d, false), A, d, -n * half, baseY, -n, -1f);
+            // Openings resting on the floor notch the bottom edge; the rest are holes.
+            var holes = new List<IList<Vector2>>();
+            var notches = new List<OpeningRect>();
+            foreach (var r in openings)
+            {
+                if (r.v0 <= SameEps) notches.Add(r);
+                else holes.Add(new List<Vector2>
+                    { new Vector2(r.u0, r.v0), new Vector2(r.u1, r.v0), new Vector2(r.u1, r.v1), new Vector2(r.u0, r.v1) });
+            }
+            notches.Sort((a, b) => a.u0.CompareTo(b.u0));
+
+            AddSide(md, s.id + "/L", Notch(SidePolygon(si, ei, A, d, true), notches), holes, A, d, n * half, baseY, n, len);
+            AddSide(md, s.id + "/R", Notch(SidePolygon(si, ei, A, d, false), notches), holes, A, d, -n * half, baseY, -n, -1f);
+
+            foreach (var r in openings) AddOpeningFaces(md, r, A, d, n, half, baseY, regions);
 
             float u0 = si.cut, u1 = len - ei.cut;
             if (u1 - u0 > SameEps)
@@ -216,13 +241,78 @@ namespace LevelBuilder.Geometry
         }
 
         /// <summary>
-        /// Triangulates a side polygon. UVs are metres, with u reading left-to-right as seen from outside:
-        /// the right face uses u as is, the left face (mirrorLength &gt; 0) uses length - u.
+        /// Inserts floor-level openings into the side outline's bottom edge (its first edge, running from the
+        /// start node towards the end node): (u0,0), (u0,v1), (u1,v1), (u1,0) per notch, in increasing u.
         /// </summary>
-        static void AddSide(MeshData md, string key, List<Vector2> poly, Vector2 A, Vector2 d, Vector2 offset,
-            float baseY, Vector2 normal2D, float mirrorLength)
+        static List<Vector2> Notch(List<Vector2> poly, List<OpeningRect> notches)
         {
-            var tris = Triangulator.Triangulate(poly, null, out var verts);
+            if (notches.Count == 0) return poly;
+            var steps = new List<Vector2>(notches.Count * 4);
+            foreach (var r in notches)
+            {
+                steps.Add(new Vector2(r.u0, 0f));
+                steps.Add(new Vector2(r.u0, r.v1));
+                steps.Add(new Vector2(r.u1, r.v1));
+                steps.Add(new Vector2(r.u1, 0f));
+            }
+            poly.InsertRange(1, steps);
+            return poly;
+        }
+
+        /// <summary>
+        /// Faces lining an opening through the wall's thickness: the two side jambs (normals pointing into the
+        /// opening) and the lintel ("{id}/jamb"), the sill top when it is raised ("{id}/sill"), and for
+        /// floor-level openings a threshold on each half of the thickness not covered by a floor region
+        /// ("{id}/threshold").
+        /// </summary>
+        static void AddOpeningFaces(MeshData md, OpeningRect r, Vector2 A, Vector2 d, Vector2 n, float half, float baseY,
+            List<Region> regions)
+        {
+            string id = r.opening.id;
+            var p0 = A + d * r.u0; var p1 = A + d * r.u1;
+            var side = n * half;
+            // AddVertical's normal is the right perpendicular of a→b: R→L gives +d, L→R gives −d.
+            AddVertical(md, id + "/jamb", p0 - side, p0 + side, baseY, r.v0, r.v1);
+            AddVertical(md, id + "/jamb", p1 + side, p1 - side, baseY, r.v0, r.v1);
+            AddTop(md, id + "/jamb", Quad(p0 - side, p1 - side, p1 + side, p0 + side), baseY + r.v1, Vector3.down);
+            if (r.v0 > SameEps)
+            {
+                AddTop(md, id + "/sill", Quad(p0 - side, p1 - side, p1 + side, p0 + side), baseY + r.v0, Vector3.up);
+                return;
+            }
+            var mid = A + d * r.opening.center;
+            foreach (float sgn in new[] { 1f, -1f })
+            {
+                if (OnFloorRegion(mid + n * (sgn * half * 0.5f), regions)) continue;
+                var face = n * (sgn * half);
+                AddTop(md, id + "/threshold", Quad(p0, p1, p1 + face, p0 + face), baseY, Vector3.up);
+            }
+        }
+
+        static List<Vector2> Quad(Vector2 a, Vector2 b, Vector2 c, Vector2 e) => new List<Vector2> { a, b, c, a, c, e };
+
+        static bool OnFloorRegion(Vector2 p, List<Region> regions)
+        {
+            if (regions == null) return false;
+            foreach (var reg in regions)
+            {
+                if (!PlanarFaces.PointInPolygon(p, reg.polygon)) continue;
+                bool inHole = false;
+                foreach (var h in reg.holes)
+                    if (PlanarFaces.PointInPolygon(p, h)) { inHole = true; break; }
+                if (!inHole) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Triangulates a side polygon (with optional holes). UVs are metres, with u reading left-to-right as
+        /// seen from outside: the right face uses u as is, the left face (mirrorLength &gt; 0) uses length - u.
+        /// </summary>
+        static void AddSide(MeshData md, string key, List<Vector2> poly, IList<IList<Vector2>> holes, Vector2 A, Vector2 d,
+            Vector2 offset, float baseY, Vector2 normal2D, float mirrorLength)
+        {
+            var tris = Triangulator.Triangulate(poly, holes, out var verts);
             var pts = new List<Vector3>(verts.Count);
             var uvs = new List<Vector2>(verts.Count);
             foreach (var uv in verts)
@@ -251,8 +341,11 @@ namespace LevelBuilder.Geometry
             md.AddFace(key, pts, uvs, new[] { 0, 1, 2, 0, 2, 3 }, normal);
         }
 
-        /// <summary>Horizontal face from a flat list of plan triangles; UVs are world xz in metres.</summary>
-        static void AddTop(MeshData md, string key, List<Vector2> triPoints, float y)
+        /// <summary>Upward horizontal face from a flat list of plan triangles; UVs are world xz in metres.</summary>
+        static void AddTop(MeshData md, string key, List<Vector2> triPoints, float y) => AddTop(md, key, triPoints, y, Vector3.up);
+
+        /// <summary>Horizontal face (normal up or down) from a flat list of plan triangles; UVs are world xz in metres.</summary>
+        static void AddTop(MeshData md, string key, List<Vector2> triPoints, float y, Vector3 normal)
         {
             if (triPoints.Count < 3) return;
             var pts = new List<Vector3>(triPoints.Count);
@@ -262,7 +355,7 @@ namespace LevelBuilder.Geometry
                 pts.Add(ToWorld(triPoints[i], y));
                 idx.Add(i);
             }
-            md.AddFace(key, pts, triPoints, idx, Vector3.up);
+            md.AddFace(key, pts, triPoints, idx, normal);
         }
     }
 }

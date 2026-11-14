@@ -16,7 +16,7 @@ public class WallMeshBuilderTests
     static FaceGroup Group(MeshData md, string key) => md.groups.Find(g => g.key == key);
 
     /// <summary>Each triangle's geometric normal (Cross(b-a, c-a), as Mesh.RecalculateNormals uses) must agree with the stored normals.</summary>
-    static void AssertWindingMatchesNormals(MeshData md)
+    internal static void AssertWindingMatchesNormals(MeshData md)
     {
         int checkedTris = 0;
         foreach (var g in md.groups)
