@@ -36,6 +36,14 @@ namespace LevelBuilder
 
         Building B => building != null ? building : (building = GetComponent<Building>());
 
+        Dictionary<string, StairValidation> stairValidations = new Dictionary<string, StairValidation>();
+
+        /// <summary>
+        /// Validation of every stair in the data, keyed by stair id, as computed by the last regeneration (full or
+        /// partial). The editor reads it to paint invalid stairs without recomputing.
+        /// </summary>
+        public IReadOnlyDictionary<string, StairValidation> StairValidations => stairValidations;
+
 #if UNITY_EDITOR
         /// <summary>
         /// Editor only: a persistent material asset to serialize into defaultMaterial at creation, so player builds
@@ -198,10 +206,22 @@ namespace LevelBuilder
         void BuildSet()
         {
             int n = B.data.floors.Count;
+            ValidateStairs();
             RemoveGenerated(n);
             foreach (var i in toBuild)
                 if (i >= 0 && i < n) BuildFloorObject(i);
             toBuild.Clear();
+        }
+
+        // Once per pass: every stair in the data is validated once and the result is shared by the stair objects,
+        // the slab holes of floors N and N+1 and StairValidations (deleted stairs drop out).
+        void ValidateStairs()
+        {
+            var next = new Dictionary<string, StairValidation>();
+            foreach (var s in B.data.stairs)
+                if (s != null && !string.IsNullOrEmpty(s.id) && !next.ContainsKey(s.id))
+                    next[s.id] = StairValidator.Validate(B.data, s);
+            stairValidations = next;
         }
 
         // Removes generated floors with index >= n (stale); n < 0 removes all generated floors.
@@ -232,9 +252,73 @@ namespace LevelBuilder
             marker.ownerId = GeneratedFloorMarker.KeyOf(this);
             marker.hideFlags = GenFlags | HideFlags.HideInInspector;
             AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation));
-            AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f));
-            AddPart(root.transform, "Ceiling", SlabMeshBuilder.BuildCeiling(f, top));
+            AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f, StairHoles(f.id, false)));
+            AddPart(root.transform, "Ceiling", SlabMeshBuilder.BuildCeiling(f, top, StairHoles(f.id, true)));
             BuildOpenings(root.transform, f);
+            BuildStairs(root.transform, f);
+        }
+
+        // ---- Stairs ----
+
+        // fromSide: holes of the stairs leaving this floor (its ceiling); otherwise of those arriving (its floor slab).
+        // Only stairs with a valid layout whose hole does not cross a wall of the upper floor cut the slabs.
+        List<IList<Vector2>> StairHoles(string floorId, bool fromSide)
+        {
+            List<IList<Vector2>> holes = null;
+            foreach (var s in B.data.stairs)
+            {
+                if (s == null || (fromSide ? s.fromFloorId : s.toFloorId) != floorId) continue;
+                if (!TryGetStairValidation(s, out var v)) continue;
+                var l = v.layout;
+                if (l == null || !l.ok || l.hole == null || l.hole.Count < 3 || v.issues.Contains(StairIssue.HoleCrossesWall)) continue;
+                (holes ?? (holes = new List<IList<Vector2>>())).Add(l.hole);
+            }
+            return holes;
+        }
+
+        bool TryGetStairValidation(StairData s, out StairValidation v)
+        {
+            v = null;
+            return s != null && !string.IsNullOrEmpty(s.id) && stairValidations.TryGetValue(s.id, out v) && v != null;
+        }
+
+        // Stairs leaving this floor; generated even when invalid (an invalid layout gives empty meshes).
+        void BuildStairs(Transform root, FloorData f)
+        {
+            Transform stairs = null;
+            foreach (var s in B.data.stairs)
+            {
+                if (s == null || s.fromFloorId != f.id || !TryGetStairValidation(s, out var v)) continue;
+                if (stairs == null) stairs = NewChild(root, "Stairs").transform;
+                if (stairs.Find(s.id) != null) continue; // duplicate id: first one wins, like StairValidations
+                var go = NewChild(stairs, s.id);
+                var l = v.layout;
+                float baseY = f.elevation;
+
+                var steps = AddMeshObject(go.transform, "Steps", StairMeshBuilder.Steps(s, l, baseY), BaseMaterial, out var stepsMesh);
+                if (!s.collisionRamp)
+                {
+                    var mc = steps.AddComponent<MeshCollider>();
+                    if (stepsMesh.vertexCount > 0) mc.sharedMesh = stepsMesh;
+                }
+                if (s.collisionRamp)
+                {
+                    // Collider only: no MeshFilter/MeshRenderer. The mesh is DontSave and found through the collider
+                    // when the floor is destroyed.
+                    var ramp = NewChild(go.transform, "Ramp");
+                    var mc = ramp.AddComponent<MeshCollider>();
+                    var md = StairMeshBuilder.Ramp(l, baseY, id: s.id);
+                    if (md.vertices.Count > 0)
+                    {
+                        var mesh = md.ToMesh();
+                        mesh.hideFlags = GenFlags;
+                        mesh.name = "Ramp";
+                        mc.sharedMesh = mesh;
+                    }
+                }
+                if (s.railLeft || s.railRight)
+                    AddPart(go.transform, "Rails", StairMeshBuilder.Rails(s, l, baseY));
+            }
         }
 
         Material BaseMaterial => defaultMaterial != null ? defaultMaterial : DefaultMaterial();
@@ -442,9 +526,15 @@ namespace LevelBuilder
             var marker = root.GetComponent<GeneratedFloorMarker>();
             if (marker != null && marker.ownerId == GeneratedFloorMarker.KeyOf(this))
             {
+                // Collider-only meshes (stair ramps) too; a mesh shared by filter and collider is destroyed once.
+                var meshes = new HashSet<Mesh>();
                 foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
-                    if (mf.sharedMesh != null && (mf.sharedMesh.hideFlags & HideFlags.DontSave) == HideFlags.DontSave)
-                        DestroyObj(mf.sharedMesh);
+                    if (mf.sharedMesh != null) meshes.Add(mf.sharedMesh);
+                foreach (var mc in root.GetComponentsInChildren<MeshCollider>(true))
+                    if (mc.sharedMesh != null) meshes.Add(mc.sharedMesh);
+                foreach (var m in meshes)
+                    if ((m.hideFlags & HideFlags.DontSave) == HideFlags.DontSave)
+                        DestroyObj(m);
             }
             // Object.Destroy is deferred to the end of the frame: rename so the dying floor is no longer a generated
             // floor (FindDoor, RemoveGenerated) in the meantime.
