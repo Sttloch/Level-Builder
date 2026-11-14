@@ -60,46 +60,81 @@ namespace LevelBuilder.Geometry
         // ---------------------------------------------------------------- Ramp
 
         /// <summary>
-        /// Collision ramp: per flight (run of consecutive treads) a ruled slab whose top runs from the flight's
-        /// lower riser edge (at the previous piece's height) through every nosing to its upper end (topA–topB
-        /// at H, or the next landing's front edge at the landing height); each landing gets a flat slab.
-        /// The underside is the top moved down by <paramref name="thickness"/>.
+        /// Collision ramp. Per flight (the treads after the start or after a landing, possibly none) a ruled
+        /// slab whose top starts one tread before the flight's lower riser edge at the lower height (0, or the
+        /// landing height), passes through every tread nosing and ends at the upper riser edge (topA–topB at H,
+        /// or the next landing's front edge at the landing height), so it never has a vertical step. Each landing
+        /// gets a flat slab. The underside is the top moved down by <paramref name="thickness"/>.
         /// </summary>
         public static MeshData Ramp(StairLayoutResult l, float baseY, float thickness = 0.05f, string id = null)
         {
             var md = new MeshData();
             if (l == null || !l.ok) return md;
             string key = "stair:" + id + "/ramp";
-            float H = l.risers * l.riser;
-            var pieces = l.pieces;
-            for (int i = 0; i < pieces.Count;)
+            foreach (var flight in FlightSections(l))
             {
-                var p = pieces[i];
-                if (p.kind == StairPieceKind.Landing)
-                {
-                    if (p.polygon != null && p.polygon.Count >= 3)
-                        AddFlatSlab(md, key, Ccw(p.polygon), baseY + p.height, thickness);
-                    i++;
-                    continue;
-                }
-                int j = i;
-                while (j + 1 < pieces.Count && pieces[j + 1].kind == StairPieceKind.Tread) j++;
-                var sections = new List<Section>();
-                float lower = i > 0 ? pieces[i - 1].height : 0f;
-                sections.Add(new Section(p.frontA, p.frontB, baseY + lower));
-                for (int t = i; t <= j; t++)
-                    sections.Add(new Section(pieces[t].frontA, pieces[t].frontB, baseY + pieces[t].height));
-                if (j + 1 < pieces.Count)
-                    sections.Add(new Section(pieces[j + 1].frontA, pieces[j + 1].frontB, baseY + pieces[j + 1].height));
-                else
-                    sections.Add(new Section(l.topA, l.topB, baseY + H));
-                AddRuledSlab(md, key, sections, thickness);
-                i = j + 1;
+                var secs = new List<Section>(flight.Count);
+                foreach (var f in flight) secs.Add(new Section(f.a, f.b, baseY + f.y));
+                AddRuledSlab(md, key, secs, thickness);
             }
+            foreach (var p in l.pieces)
+                if (p.kind == StairPieceKind.Landing && p.polygon != null && p.polygon.Count >= 3)
+                    AddFlatSlab(md, key, Ccw(p.polygon), baseY + p.height, thickness);
             return md;
         }
 
-        struct Section
+        /// <summary>Tread depth used for the ramp run-in when a layout carries no tread to measure.</summary>
+        const float DefaultTread = 0.28f;
+
+        /// <summary>
+        /// Ramp top cross-sections per flight, heights relative to floor N: run-in point one tread before the
+        /// lower riser edge, every nosing, then the upper riser edge.
+        /// </summary>
+        internal static List<List<Section>> FlightSections(StairLayoutResult l)
+        {
+            var res = new List<List<Section>>();
+            if (l == null || !l.ok) return res;
+            var pieces = l.pieces;
+            float H = l.risers * l.riser;
+            float T = EstimateTread(l);
+            int start = 0;
+            float lower = 0f;
+            while (true)
+            {
+                int j = start;
+                while (j < pieces.Count && pieces[j].kind == StairPieceKind.Tread) j++;
+                Vector2 ea, eb;
+                if (start < pieces.Count) { ea = pieces[start].frontA; eb = pieces[start].frontB; }
+                else { ea = l.topA; eb = l.topB; }
+                var e = eb - ea;
+                var dir = e.sqrMagnitude > 1e-12f ? new Vector2(-e.y, e.x).normalized : l.startDir; // up the stair
+                var secs = new List<Section> { new Section(ea - dir * T, eb - dir * T, lower) };
+                for (int t = start; t < j; t++) secs.Add(new Section(pieces[t].frontA, pieces[t].frontB, pieces[t].height));
+                if (j < pieces.Count) secs.Add(new Section(pieces[j].frontA, pieces[j].frontB, pieces[j].height));
+                else secs.Add(new Section(l.topA, l.topB, H));
+                res.Add(secs);
+                if (j >= pieces.Count) break;
+                lower = pieces[j].height;
+                start = j + 1;
+            }
+            return res;
+        }
+
+        static float EstimateTread(StairLayoutResult l)
+        {
+            var pieces = l.pieces;
+            for (int k = 0; k < pieces.Count; k++)
+            {
+                if (pieces[k].kind != StairPieceKind.Tread) continue;
+                Vector2 na = k + 1 < pieces.Count ? pieces[k + 1].frontA : l.topA;
+                Vector2 nb = k + 1 < pieces.Count ? pieces[k + 1].frontB : l.topB;
+                float d = ((na + nb) - (pieces[k].frontA + pieces[k].frontB)).magnitude * 0.5f;
+                if (d > 1e-4f) return d;
+            }
+            return DefaultTread;
+        }
+
+        internal struct Section
         {
             public Vector2 a, b;
             public float y;

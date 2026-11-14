@@ -44,6 +44,8 @@ namespace LevelBuilder.Geometry
     {
         public const float Headroom = 2.1f;
         public const float CornerAngle = 30f;
+        /// <summary>Largest turn a single Corner point may make (U-stairs use two corners).</summary>
+        public const float MaxCornerTurn = 150f;
 
         const float MergeDist = 0.01f;
         const float MaxTurn = 179f;
@@ -75,6 +77,7 @@ namespace LevelBuilder.Geometry
                 float turn = Vector2.Angle(pts[i] - pts[i - 1], pts[i + 1] - pts[i]);
                 if (!(turn < MaxTurn)) return Fail(r, "RouteInvalid");
                 sharp[i] = kinds[i] == StairPointKind.Corner && turn > CornerAngle;
+                if (sharp[i] && turn > MaxCornerTurn + Tol) return Fail(r, "RouteInvalid");
             }
 
             float H = to.elevation - from.elevation;
@@ -104,9 +107,20 @@ namespace LevelBuilder.Geometry
             }
             cl.Finish();
             r.centerline = cl.pts;
-            // Two landings closer than the width would overlap: the second corner could not get its own landing.
+            // Landing reach along each leg from its corner: h up to 90°, h·tan(turn/2) beyond, so the outgoing
+            // flight's inner side clears the incoming flight.
+            var reach = new float[cornerIdx.Count];
+            for (int i = 0; i < cornerIdx.Count; i++)
+            {
+                int vi = cornerIdx[i];
+                float turn = Vector2.Angle(cl.SegDir(vi - 1), cl.SegDir(vi));
+                reach[i] = h * Mathf.Max(1f, Mathf.Tan(turn * 0.5f * Mathf.Deg2Rad));
+            }
+            // The first landing must fit after the start, and two landings must not overlap
+            // (for two 90° corners: closer than the width).
+            if (cornerIdx.Count > 0 && cl.cum[cornerIdx[0]] < reach[0] - Tol) return Fail(r, "RouteInvalid");
             for (int i = 1; i < cornerIdx.Count; i++)
-                if (cl.cum[cornerIdx[i]] - cl.cum[cornerIdx[i - 1]] < w - Tol) return Fail(r, "RouteInvalid");
+                if (cl.cum[cornerIdx[i]] - cl.cum[cornerIdx[i - 1]] < reach[i - 1] + reach[i] - Tol) return Fail(r, "RouteInvalid");
 
             // 3. Walk the centerline.
             float ceiling = to.elevation - to.slabThickness;
@@ -119,12 +133,13 @@ namespace LevelBuilder.Geometry
                 piece.clearance = ceiling - (from.elevation + piece.height);
                 cl.Section(sPos, h, out piece.frontA, out piece.frontB);
                 List<Vector2> left, right;
-                if (ci < cornerIdx.Count && sPos + tread > cl.cum[cornerIdx[ci]] - h + Tol)
+                if (ci < cornerIdx.Count && sPos + tread > cl.cum[cornerIdx[ci]] - reach[ci] + Tol)
                 {
+                    float e = reach[ci];
                     int vi = cornerIdx[ci++];
                     piece.kind = StairPieceKind.Landing;
-                    Landing(cl, vi, sPos, h, out left, out right);
-                    sPos = cl.cum[vi] + h;
+                    Landing(cl, vi, sPos, h, e, out left, out right);
+                    sPos = cl.cum[vi] + e;
                 }
                 else
                 {
@@ -184,10 +199,15 @@ namespace LevelBuilder.Geometry
         static float Cross(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
 
         /// <summary>
-        /// Landing at centerline vertex vi, starting at centerline position s: covers the incoming leg up to the
-        /// corner, the square of side 2h around the corner and h of the outgoing leg. Chains run forward.
+        /// Landing at centerline vertex vi from centerline position s (entry riser edge) to cum[vi] + reach
+        /// (exit edge = the next flight's first riser edge). Outer side: along the incoming outer offset line to
+        /// its intersection with the outgoing one (miter) when that lies within the width of the corner,
+        /// else bevelled through the corner square's two outer corners. Inner side: through the inner miter for
+        /// turns under 90°; from 90° on the exit inner point already lies on the incoming inner line (reach is
+        /// h·tan(turn/2)), so the inner side is straight. Callers guarantee s ≤ cum[vi] − reach, so nothing
+        /// lies behind the entry edge. Chains run forward.
         /// </summary>
-        static void Landing(Centerline cl, int vi, float s, float h, out List<Vector2> left, out List<Vector2> right)
+        static void Landing(Centerline cl, int vi, float s, float h, float reach, out List<Vector2> left, out List<Vector2> right)
         {
             var c = cl.pts[vi];
             var t1 = cl.SegDir(vi - 1);
@@ -195,21 +215,22 @@ namespace LevelBuilder.Geometry
             var l1 = Left(t1);
             var l2 = Left(t2);
             cl.Section(s, h, out var ls, out var rs);
-            var le = c + t2 * h + l2 * h;
-            var re = c + t2 * h - l2 * h;
+            cl.Section(cl.cum[vi] + reach, h, out var le, out var re);
             float turn = Vector2.Angle(t1, t2);
             bool rightTurn = Cross(t1, t2) < 0f;
             // Outer side = opposite to the turn; inner side = towards it.
             Vector2 o1 = rightTurn ? l1 : -l1, o2 = rightTurn ? l2 : -l2;
-            var outer = new List<Vector2> { rightTurn ? ls : rs, c + o1 * h + t1 * h };
-            if (turn > 90f + 0.1f) outer.Add(c + o2 * h - t2 * h);
+            var miter = (o1 + o2) * (h / Mathf.Max(1f + Vector2.Dot(o1, o2), 1e-4f));
+            var outer = new List<Vector2> { rightTurn ? ls : rs };
+            if (miter.magnitude <= 2f * h + Tol) outer.Add(c + miter);
+            else
+            {
+                outer.Add(c + o1 * h + t1 * h);
+                outer.Add(c + o2 * h - t2 * h);
+            }
             outer.Add(rightTurn ? le : re);
             var inner = new List<Vector2> { rightTurn ? rs : ls };
-            if (turn < 90f - 0.1f)
-            {
-                var m = -(o1 + o2) * (h / (1f + Vector2.Dot(o1, o2))); // inner miter
-                inner.Add(c + m);
-            }
+            if (turn < 90f - 0.1f) inner.Add(c - miter);
             inner.Add(rightTurn ? re : le);
             left = rightTurn ? outer : inner;
             right = rightTurn ? inner : outer;

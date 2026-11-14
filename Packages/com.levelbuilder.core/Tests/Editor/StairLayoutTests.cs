@@ -325,4 +325,55 @@ public class StairLayoutTests
         Assert.DoesNotThrow(() => r = StairLayout.Compute(new StairData { route = null }, From(), To()));
         Assert.IsFalse(r.ok);
     }
+    static bool HasEdge(List<Vector2> poly, Vector2 a, Vector2 b)
+    {
+        for (int i = 0; i < poly.Count; i++)
+        {
+            var u = poly[i]; var v = poly[(i + 1) % poly.Count];
+            if (((u - a).magnitude < Eps && (v - b).magnitude < Eps) || ((u - b).magnitude < Eps && (v - a).magnitude < Eps))
+                return true;
+        }
+        return false;
+    }
+
+    static StairData Turn(float degrees, bool right, float leg = 2f)
+    {
+        float a = degrees * Mathf.Deg2Rad, sx = right ? 1f : -1f;
+        return Stair(P(0, 0), P(0, leg), P(sx * 3f * Mathf.Sin(a), leg + 3f * Mathf.Cos(a)));
+    }
+
+    [Test] public void CornerLandings_ShareEntryAndExitEdges_NoOverlap()
+    {
+        foreach (float deg in new[] { 90f, 60f, 120f, 150f })
+            foreach (bool right in new[] { true, false })
+            {
+                string tag = deg + (right ? " right" : " left");
+                var r = Compute(Turn(deg, right, deg > 120f ? 3f : 2f));
+                Assert.IsTrue(r.ok, tag + ": " + r.error);
+                int li = r.pieces.FindIndex(p => p.kind == StairPieceKind.Landing);
+                Assert.GreaterOrEqual(li, 0, tag);
+                var land = r.pieces[li];
+                Assert.Greater(Triangulator.SignedArea(land.polygon), 0f, tag);
+                Assert.IsTrue(IsSimplePolygon(land.polygon), tag + " simple");
+                Assert.IsTrue(HasEdge(land.polygon, land.frontA, land.frontB), tag + " entry edge");
+                Vector2 na = li + 1 < r.pieces.Count ? r.pieces[li + 1].frontA : r.topA;
+                Vector2 nb = li + 1 < r.pieces.Count ? r.pieces[li + 1].frontB : r.topB;
+                Assert.IsTrue(HasEdge(land.polygon, na, nb), tag + " exit edge");
+                for (int i = 0; i < r.pieces.Count; i++)
+                {
+                    var ci = Centroid(r.pieces[i].polygon);
+                    for (int j = 0; j < r.pieces.Count; j++)
+                        if (i != j)
+                            Assert.IsFalse(PlanarFaces.PointInPolygon(ci, r.pieces[j].polygon), $"{tag}: piece {i} centroid inside piece {j}");
+                }
+            }
+    }
+
+    [Test] public void SingleCornerTurnOver150_IsRouteInvalid()
+    {
+        var r = Compute(Turn(160f, true, 3f));
+        Assert.IsFalse(r.ok);
+        Assert.AreEqual("RouteInvalid", r.error);
+        Assert.IsTrue(Compute(Turn(150f, false, 3f)).ok);
+    }
 }

@@ -25,14 +25,16 @@ public class StairMeshTests
 
     static StairData Straight() => Stair(P(0, 0), P(0, 10));
 
-    /// <summary>Straight, L landing, U (two landings), 120° turn and smooth fan.</summary>
+    /// <summary>Straight, L landing (both turn directions), U (two landings), 120° turn (both directions) and smooth fan.</summary>
     static IEnumerable<StairData> AllShapes()
     {
         yield return Straight();
         yield return Stair(P(0, 0), P(0, 2), P(3, 2));
+        yield return Stair(P(0, 0), P(0, 2), P(-3, 2));
         yield return Stair(P(0, 0), P(0, 4), P(1, 4), P(1, 0));
         float a = 120f * Mathf.Deg2Rad;
         yield return Stair(P(0, 0), P(0, 2), P(3f * Mathf.Sin(a), 2f + 3f * Mathf.Cos(a)));
+        yield return Stair(P(0, 0), P(0, 2), P(-3f * Mathf.Sin(a), 2f + 3f * Mathf.Cos(a)));
         yield return Stair(P(0, 0), P(0, 3, StairPointKind.Smooth), P(3, 3));
     }
 
@@ -173,6 +175,54 @@ public class StairMeshTests
             foreach (var v in md.vertices) maxY = Mathf.Max(maxY, v.y);
             Assert.AreEqual(BaseY + 3f, maxY, 1e-4f);
         }
+    }
+
+    [Test] public void Ramp_NoVerticalSteps_StartsOneTreadBefore()
+    {
+        foreach (var s in AllShapes())
+        {
+            var l = Layout(s);
+            var flights = StairMeshBuilder.FlightSections(l);
+            Assert.Greater(flights.Count, 0);
+            var first = flights[0][0];
+            Assert.AreEqual(0f, first.y, 1e-5f);
+            Assert.Less((first.a - (l.bottomA - l.startDir * s.tread)).magnitude, 1e-3f, "run-in A");
+            Assert.Less((first.b - (l.bottomB - l.startDir * s.tread)).magnitude, 1e-3f, "run-in B");
+            foreach (var f in flights)
+            {
+                Assert.GreaterOrEqual(f.Count, 2);
+                for (int i = 0; i + 1 < f.Count; i++)
+                {
+                    float plan = ((f[i + 1].a + f[i + 1].b) - (f[i].a + f[i].b)).magnitude * 0.5f;
+                    Assert.Greater(f[i + 1].y, f[i].y, "height rises");
+                    Assert.Greater(plan, 1e-3f, "no vertical step");
+                }
+            }
+            var lastFlight = flights[flights.Count - 1];
+            Assert.AreEqual(3f, lastFlight[lastFlight.Count - 1].y, 1e-4f);
+        }
+    }
+
+    [Test] public void SingleRiser_RampSlab_NoRails()
+    {
+        var s = Straight();
+        s.riserTarget = 3f;
+        var l = Layout(s);
+        Assert.AreEqual(1, l.risers);
+        Assert.AreEqual(0, l.pieces.Count);
+        var flights = StairMeshBuilder.FlightSections(l);
+        Assert.AreEqual(1, flights.Count);
+        Assert.AreEqual(2, flights[0].Count);
+        Assert.Less((flights[0][0].a - (l.bottomA - l.startDir * 0.28f)).magnitude, 1e-3f);
+        Assert.AreEqual(0f, flights[0][0].y, 1e-5f);
+        Assert.Less((flights[0][1].a - l.topA).magnitude, 1e-3f);
+        Assert.Less((flights[0][1].b - l.topB).magnitude, 1e-3f);
+        Assert.AreEqual(3f, flights[0][1].y, 1e-4f);
+        var ramp = StairMeshBuilder.Ramp(l, BaseY);
+        Assert.Greater(ramp.vertices.Count, 0);
+        WallMeshBuilderTests.AssertWindingMatchesNormals(ramp);
+        Assert.AreEqual(0, StairMeshBuilder.Rails(s, l, BaseY).vertices.Count);
+        Assert.AreEqual(s.width * 3f, Area(StairMeshBuilder.Steps(s, l, BaseY), "stair:s/riser"), 1e-3f);
     }
 
     [Test] public void Rails_StayWithinStair()
