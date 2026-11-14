@@ -191,7 +191,7 @@ namespace LevelBuilder
             var root = new GameObject("Floor " + i) { hideFlags = GenFlags };
             root.transform.SetParent(transform, false);
             var marker = root.AddComponent<GeneratedFloorMarker>();
-            marker.ownerId = GetInstanceID();
+            marker.ownerId = GeneratedFloorMarker.KeyOf(this);
             marker.hideFlags = GenFlags | HideFlags.HideInInspector;
             AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation));
             AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f));
@@ -217,7 +217,7 @@ namespace LevelBuilder
         void DestroyFloorObject(GameObject root)
         {
             var marker = root.GetComponent<GeneratedFloorMarker>();
-            if (marker != null && marker.ownerId == GetInstanceID())
+            if (marker != null && marker.ownerId == GeneratedFloorMarker.KeyOf(this))
             {
                 foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
                     if (mf.sharedMesh != null) DestroyObj(mf.sharedMesh);
