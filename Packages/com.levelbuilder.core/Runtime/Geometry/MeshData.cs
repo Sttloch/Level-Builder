@@ -41,24 +41,30 @@ namespace LevelBuilder.Geometry
         /// </summary>
         public void AddFace(string key, IList<Vector3> points, IList<Vector2> faceUvs, IList<int> triangles, Vector3 normal)
         {
-            var g = GetOrAddGroup(key);
             int baseIndex = vertices.Count;
+            var kept = new List<int>(triangles.Count);
+            for (int i = 0; i + 2 < triangles.Count; i += 3)
+            {
+                int a = triangles[i], b = triangles[i + 1], c = triangles[i + 2];
+                var n = Vector3.Cross(points[b] - points[a], points[c] - points[a]);
+                if (n.sqrMagnitude < DegenerateEps) continue; // zero-area triangle
+                if (Vector3.Dot(n, normal) < 0f) { int t = b; b = c; c = t; }
+                kept.Add(baseIndex + a);
+                kept.Add(baseIndex + b);
+                kept.Add(baseIndex + c);
+            }
+            if (kept.Count == 0) return;
+
             for (int i = 0; i < points.Count; i++)
             {
                 vertices.Add(points[i]);
                 normals.Add(normal);
                 uvs.Add(faceUvs[i]);
             }
-            for (int i = 0; i + 2 < triangles.Count; i += 3)
-            {
-                int a = triangles[i], b = triangles[i + 1], c = triangles[i + 2];
-                var n = Vector3.Cross(points[b] - points[a], points[c] - points[a]);
-                if (Vector3.Dot(n, normal) < 0f) { int t = b; b = c; c = t; }
-                g.triangles.Add(baseIndex + a);
-                g.triangles.Add(baseIndex + b);
-                g.triangles.Add(baseIndex + c);
-            }
+            GetOrAddGroup(key).triangles.AddRange(kept);
         }
+
+        const float DegenerateEps = 1e-14f;
 
         /// <summary>
         /// Builds a Unity mesh. In this plan every group is combined into a single submesh

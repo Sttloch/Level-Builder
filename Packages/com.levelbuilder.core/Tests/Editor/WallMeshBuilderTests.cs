@@ -37,6 +37,105 @@ public class WallMeshBuilderTests
         Assert.Greater(checkedTris, 0);
     }
 
+    /// <summary>
+    /// Closed-surface check (open only at the bottom, y = baseY, where walls sit on the slab):
+    /// after welding positions within 1e-4 and splitting edges at vertices lying on them
+    /// (T-junctions), every directed edge a→b must be matched by the same number of b→a edges.
+    /// </summary>
+    static void AssertWatertight(MeshData md, float baseY)
+    {
+        const float tol = 1e-4f;
+        var pos = new List<Vector3>();
+        var map = new int[md.vertices.Count];
+        for (int i = 0; i < md.vertices.Count; i++)
+        {
+            int found = -1;
+            for (int j = 0; j < pos.Count; j++)
+                if ((pos[j] - md.vertices[i]).sqrMagnitude < tol * tol) { found = j; break; }
+            if (found < 0) { found = pos.Count; pos.Add(md.vertices[i]); }
+            map[i] = found;
+        }
+
+        var edges = new Dictionary<(int, int), int>();
+        void AddEdge(int p, int q)
+        {
+            var on = new List<KeyValuePair<float, int>>();
+            var a = pos[p]; var ab = pos[q] - a;
+            float len2 = ab.sqrMagnitude;
+            for (int w = 0; w < pos.Count; w++)
+            {
+                if (w == p || w == q) continue;
+                float t = Vector3.Dot(pos[w] - a, ab) / len2;
+                if (t <= 0f || t >= 1f) continue;
+                if ((a + ab * t - pos[w]).magnitude < tol) on.Add(new KeyValuePair<float, int>(t, w));
+            }
+            on.Sort((x, y) => x.Key.CompareTo(y.Key));
+            int prev = p;
+            foreach (var kv in on) { Count(prev, kv.Value); prev = kv.Value; }
+            Count(prev, q);
+        }
+        void Count(int p, int q)
+        {
+            edges.TryGetValue((p, q), out int c);
+            edges[(p, q)] = c + 1;
+        }
+
+        foreach (var g in md.groups)
+            for (int i = 0; i < g.triangles.Count; i += 3)
+            {
+                int a = map[g.triangles[i]], b = map[g.triangles[i + 1]], c = map[g.triangles[i + 2]];
+                if (a == b || b == c || c == a) continue;
+                AddEdge(a, b); AddEdge(b, c); AddEdge(c, a);
+            }
+
+        var problems = new List<string>();
+        foreach (var kv in edges)
+        {
+            var (p, q) = kv.Key;
+            if (Mathf.Abs(pos[p].y - baseY) < tol && Mathf.Abs(pos[q].y - baseY) < tol) continue;
+            edges.TryGetValue((q, p), out int back);
+            if (back != kv.Value) problems.Add($"{pos[p]:F3}->{pos[q]:F3} x{kv.Value} vs back x{back}");
+        }
+        Assert.IsEmpty(problems, "open or inconsistent edges:\n" + string.Join("\n", problems));
+    }
+
+    static float TopArea(MeshData md)
+    {
+        float area = 0f;
+        foreach (var g in md.groups)
+            for (int i = 0; i < g.triangles.Count; i += 3)
+            {
+                int a = g.triangles[i], b = g.triangles[i + 1], c = g.triangles[i + 2];
+                if (md.normals[a].y < 0.99f) continue;
+                area += Vector3.Cross(md.vertices[b] - md.vertices[a], md.vertices[c] - md.vertices[a]).magnitude * 0.5f;
+            }
+        return area;
+    }
+
+    static float GroupArea(MeshData md, string key)
+    {
+        var g = Group(md, key);
+        if (g == null) return 0f;
+        float area = 0f;
+        for (int i = 0; i < g.triangles.Count; i += 3)
+        {
+            var a = md.vertices[g.triangles[i]];
+            area += Vector3.Cross(md.vertices[g.triangles[i + 1]] - a, md.vertices[g.triangles[i + 2]] - a).magnitude * 0.5f;
+        }
+        return area;
+    }
+
+    static WallSegment SegmentBetween(FloorData f, Vector2 a, Vector2 b)
+    {
+        foreach (var s in f.segments)
+        {
+            var p = f.GetNode(s.startNodeId).position; var q = f.GetNode(s.endNodeId).position;
+            if (((p - a).magnitude < 1e-3f && (q - b).magnitude < 1e-3f) || ((p - b).magnitude < 1e-3f && (q - a).magnitude < 1e-3f))
+                return s;
+        }
+        return null;
+    }
+
     static (BuildingData b, FloorData f) StraightWall()
     {
         var b = new BuildingData(); var f = b.AddFloor();
@@ -174,6 +273,118 @@ public class WallMeshBuilderTests
         var bb = BoundsOf(WallMeshBuilder.Build(f, 5f));
         Assert.AreEqual(5f, bb.min.y, 1e-4f);
         Assert.AreEqual(8f, bb.max.y, 1e-4f);
+    }
+
+    [Test] public void StraightWall_Watertight()
+    {
+        var (_, f) = StraightWall();
+        AssertWatertight(WallMeshBuilder.Build(f, 0f), 0f);
+    }
+
+    [Test] public void LCorner_WatertightAndTopAreaEqualsFootprint()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0));
+        b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 3));
+        var md = WallMeshBuilder.Build(f, 2f);
+        AssertWatertight(md, 2f);
+        Assert.AreEqual(4.1f * 0.2f + 2.9f * 0.2f, TopArea(md), 1e-3f);
+    }
+
+    [Test] public void TJunction_TopAreaEqualsFootprint()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        b.AddSegment(f, new Vector2(0, 0), new Vector2(8, 0));
+        b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 3));
+        Assert.AreEqual(3, f.segments.Count);
+        var md = WallMeshBuilder.Build(f, 0f);
+        // Main wall 8 x 0.2 plus the branch from y = 0.1 to 3.
+        Assert.AreEqual(8f * 0.2f + 2.9f * 0.2f, TopArea(md), 1e-3f);
+        var hub = f.nodes.Find(n => (n.position - new Vector2(4, 0)).magnitude < 1e-3f);
+        Assert.IsNotNull(Group(md, "node:" + hub.id + "/top"), "junction top missing");
+        AssertWatertight(md, 0f);
+    }
+
+    [Test] public void XJunction_TopAreaEqualsFootprint()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        b.AddSegment(f, new Vector2(0, 0), new Vector2(8, 0));
+        b.AddSegment(f, new Vector2(4, -4), new Vector2(4, 4));
+        Assert.AreEqual(4, f.segments.Count);
+        var md = WallMeshBuilder.Build(f, 0f);
+        // Two 8 x 0.2 walls overlapping in a 0.2 x 0.2 square.
+        Assert.AreEqual(2f * 8f * 0.2f - 0.04f, TopArea(md), 1e-3f);
+        AssertWatertight(md, 0f);
+    }
+
+    [Test] public void LowWallLCorner_NoOpening()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        f.height = 3f;
+        var tall = b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0))[0];
+        var low = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 3))[0];
+        low.heightOverride = 1.2f;
+        var md = WallMeshBuilder.Build(f, 0f);
+        AssertWatertight(md, 0f);
+        // The tall wall's end above the low wall is capped (square, 0.2 x 1.8).
+        Assert.AreEqual(0.2f * 1.8f, GroupArea(md, tall.id + "/end"), 1e-3f);
+        // Tops: tall wall 4 x 0.2 at 3 m; low wall plus the outer mitre corner at 1.2 m.
+        Assert.AreEqual(4f * 0.2f + 0.1f * 0.2f + 2.9f * 0.2f, TopArea(md), 1e-3f);
+    }
+
+    [Test] public void LowBranchT_MainWallFaceClosedAboveBranch()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        f.height = 3f;
+        b.AddSegment(f, new Vector2(0, 0), new Vector2(8, 0));
+        b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 3));
+        var branch = SegmentBetween(f, new Vector2(4, 0), new Vector2(4, 3));
+        branch.heightOverride = 1.2f;
+        var west = SegmentBetween(f, new Vector2(0, 0), new Vector2(4, 0));
+        var east = SegmentBetween(f, new Vector2(4, 0), new Vector2(8, 0));
+        var md = WallMeshBuilder.Build(f, 0f);
+        AssertWatertight(md, 0f);
+        // Branch side (+y) of the main wall: full 8 x 3 minus the 0.2 x 1.2 covered by the branch.
+        string westKey = west.id + (west.startNodeId == branch.startNodeId || west.startNodeId == branch.endNodeId ? "/R" : "/L");
+        string eastKey = east.id + (east.startNodeId == branch.startNodeId || east.startNodeId == branch.endNodeId ? "/L" : "/R");
+        Assert.AreEqual(8f * 3f - 0.2f * 1.2f, GroupArea(md, westKey) + GroupArea(md, eastKey), 1e-3f);
+    }
+
+    [Test] public void DifferentThicknessT_StepFaceClosesGap()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        b.AddSegment(f, new Vector2(0, 0), new Vector2(8, 0));
+        b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 3));
+        SegmentBetween(f, new Vector2(4, 0), new Vector2(8, 0)).thickness = 0.4f;
+        var md = WallMeshBuilder.Build(f, 0f);
+        var hub = f.nodes.Find(n => (n.position - new Vector2(4, 0)).magnitude < 1e-3f);
+        // Square fallback between the thin and thick halves leaves a 0.1 m step that must be faced.
+        Assert.AreEqual(0.1f * 3f, GroupArea(md, "node:" + hub.id + "/side"), 1e-3f);
+        AssertWatertight(md, 0f);
+    }
+
+    [Test] public void VerticalFaces_UReadsLeftToRightFromOutside()
+    {
+        var (_, f) = StraightWall();
+        var md = WallMeshBuilder.Build(f, 0f);
+        int pairs = 0;
+        foreach (var g in md.groups)
+        {
+            if (g.key.EndsWith("/top")) continue;
+            var idx = new HashSet<int>(g.triangles);
+            foreach (int i in idx)
+                foreach (int j in idx)
+                {
+                    if (Mathf.Abs(md.vertices[i].y - md.vertices[j].y) > 1e-4f) continue;
+                    var right = Vector3.Cross(md.normals[i], Vector3.up);
+                    float dp = Vector3.Dot(md.vertices[j] - md.vertices[i], right);
+                    float du = md.uvs[j].x - md.uvs[i].x;
+                    if (Mathf.Abs(dp) < 1e-4f) continue;
+                    Assert.AreEqual(dp, du, 1e-4f, $"{g.key}: u must grow to the viewer's right in metres");
+                    pairs++;
+                }
+        }
+        Assert.Greater(pairs, 0);
     }
 
     [Test] public void Joins_LCorner_MapsToSegmentLeftRight()
