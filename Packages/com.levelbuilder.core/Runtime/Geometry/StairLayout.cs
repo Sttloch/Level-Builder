@@ -104,13 +104,14 @@ namespace LevelBuilder.Geometry
             }
             cl.Finish();
             r.centerline = cl.pts;
+            // Two landings closer than the width would overlap: the second corner could not get its own landing.
+            for (int i = 1; i < cornerIdx.Count; i++)
+                if (cl.cum[cornerIdx[i]] - cl.cum[cornerIdx[i - 1]] < w - Tol) return Fail(r, "RouteInvalid");
 
             // 3. Walk the centerline.
             float ceiling = to.elevation - to.slabThickness;
             float sPos = 0f;
             int ci = 0;
-            var leftChains = new List<List<Vector2>>();
-            var rightChains = new List<List<Vector2>>();
             for (int k = 0; k < n - 1; k++)
             {
                 while (ci < cornerIdx.Count && cl.cum[cornerIdx[ci]] <= sPos + Tol) ci++;
@@ -135,8 +136,6 @@ namespace LevelBuilder.Geometry
                 }
                 piece.polygon = Outline(right, left);
                 r.pieces.Add(piece);
-                leftChains.Add(left);
-                rightChains.Add(right);
             }
 
             r.runLength = sPos;
@@ -152,18 +151,19 @@ namespace LevelBuilder.Geometry
             var fwd = r.endDir * depth;
             r.arrivalZone = new List<Vector2> { r.topB, r.topB + fwd, r.topA + fwd, r.topA };
 
-            // 6. Hole.
+            // 6. Hole: boundary of the union of the pieces that lack headroom (the last riser has no plan area).
             int first = r.pieces.FindIndex(p => p.clearance < Headroom);
             if (first >= 0)
             {
-                var left = new List<Vector2>();
-                var right = new List<Vector2>();
-                for (int k = first; k < r.pieces.Count; k++)
+                var polys = new List<List<Vector2>>();
+                for (int k = first; k < r.pieces.Count; k++) polys.Add(r.pieces[k].polygon);
+                r.hole = UnionOutline(polys);
+                if (r.hole == null)
                 {
-                    left.AddRange(leftChains[k]);
-                    right.AddRange(rightChains[k]);
+                    var all = new List<Vector2>();
+                    foreach (var p in polys) all.AddRange(p);
+                    r.hole = ConvexHull(all);
                 }
-                r.hole = Outline(right, left);
             }
 
             r.ok = true;
@@ -225,6 +225,126 @@ namespace LevelBuilder.Geometry
             if (poly.Count < 3 || !IsSimple(poly)) return ConvexHull(poly);
             if (Triangulator.SignedArea(poly) < 0f) poly.Reverse();
             return poly;
+        }
+
+        const float SnapTol = 1e-3f;
+
+        /// <summary>
+        /// Outline of the union of CCW polygons that touch along edges (no proper overlaps): edges are split at
+        /// each other's vertices, coincident opposite edges cancel, and the rest is chained into loops.
+        /// Returns the single outer loop (CCW, collinear vertices merged), or null when there is not exactly
+        /// one outer loop or the result is not simple.
+        /// </summary>
+        internal static List<Vector2> UnionOutline(List<List<Vector2>> polys)
+        {
+            var verts = new List<Vector2>();
+            int VertexOf(Vector2 p)
+            {
+                for (int i = 0; i < verts.Count; i++)
+                    if ((verts[i] - p).sqrMagnitude < SnapTol * SnapTol) return i;
+                verts.Add(p);
+                return verts.Count - 1;
+            }
+            var raw = new List<(int a, int b)>();
+            foreach (var poly in polys)
+            {
+                if (poly == null || poly.Count < 3) continue;
+                var idx = new int[poly.Count];
+                for (int i = 0; i < poly.Count; i++) idx[i] = VertexOf(poly[i]);
+                for (int i = 0; i < idx.Length; i++)
+                    if (idx[i] != idx[(i + 1) % idx.Length]) raw.Add((idx[i], idx[(i + 1) % idx.Length]));
+            }
+
+            // Split every edge at the vertices lying on it, then cancel shared (opposite) edges.
+            var set = new HashSet<(int, int)>();
+            var order = new List<(int a, int b)>();
+            var cuts = new List<(float t, int v)>();
+            foreach (var (a, b) in raw)
+            {
+                var pa = verts[a]; var ab = verts[b] - pa;
+                float len2 = ab.sqrMagnitude;
+                cuts.Clear();
+                for (int v = 0; v < verts.Count; v++)
+                {
+                    if (v == a || v == b) continue;
+                    float t = Vector2.Dot(verts[v] - pa, ab) / len2;
+                    if (t <= 0f || t >= 1f) continue;
+                    if ((pa + ab * t - verts[v]).sqrMagnitude < SnapTol * SnapTol) cuts.Add((t, v));
+                }
+                cuts.Sort((x, y) => x.t.CompareTo(y.t));
+                int prev = a;
+                for (int i = 0; i <= cuts.Count; i++)
+                {
+                    int next = i < cuts.Count ? cuts[i].v : b;
+                    if (next == prev) continue;
+                    if (!set.Remove((next, prev)) && set.Add((prev, next))) order.Add((prev, next));
+                    prev = next;
+                }
+            }
+
+            var outgoing = new Dictionary<int, List<int>>();
+            int remaining = 0;
+            foreach (var e in order)
+            {
+                if (!set.Contains(e)) continue;
+                if (!outgoing.TryGetValue(e.a, out var l)) outgoing[e.a] = l = new List<int>();
+                l.Add(e.b);
+                remaining++;
+            }
+
+            // Chain into loops; at a pinch vertex take the leftmost turn so touching regions stay separate loops
+            // (and then fall back to the hull).
+            List<Vector2> outer = null;
+            int outerCount = 0;
+            foreach (var e in order)
+            {
+                if (!set.Contains(e)) continue;
+                var loop = new List<Vector2> { verts[e.a] };
+                set.Remove(e);
+                int start = e.a, prevV = e.a, cur = e.b, guard = remaining + 1;
+                while (cur != start)
+                {
+                    if (--guard < 0) return null;
+                    loop.Add(verts[cur]);
+                    var din = verts[cur] - verts[prevV];
+                    int best = -1;
+                    float bestAngle = float.MinValue;
+                    if (outgoing.TryGetValue(cur, out var outs))
+                        foreach (int nb in outs)
+                        {
+                            if (!set.Contains((cur, nb))) continue;
+                            float ang = Vector2.SignedAngle(din, verts[nb] - verts[cur]);
+                            if (ang > bestAngle) { bestAngle = ang; best = nb; }
+                        }
+                    if (best < 0) return null;
+                    set.Remove((cur, best));
+                    prevV = cur;
+                    cur = best;
+                }
+                if (Triangulator.SignedArea(loop) > 0f) { outer = loop; outerCount++; }
+            }
+            if (outerCount != 1) return null;
+
+            // Merge collinear consecutive vertices.
+            bool changed = true;
+            while (changed && outer.Count > 3)
+            {
+                changed = false;
+                for (int i = 0; i < outer.Count && outer.Count > 3; i++)
+                {
+                    var p0 = outer[(i + outer.Count - 1) % outer.Count];
+                    var p1 = outer[i];
+                    var p2 = outer[(i + 1) % outer.Count];
+                    var u = (p1 - p0).normalized; var v = (p2 - p1).normalized;
+                    if (Mathf.Abs(Cross(u, v)) < 1e-4f && Vector2.Dot(u, v) > 0f)
+                    {
+                        outer.RemoveAt(i);
+                        changed = true;
+                        i--;
+                    }
+                }
+            }
+            return IsSimple(outer) ? outer : null;
         }
 
         static void AddUnique(List<Vector2> l, Vector2 p)

@@ -120,20 +120,136 @@ public class StairLayoutTests
         Assert.IsFalse(r.pieces.Exists(p => p.kind == StairPieceKind.Landing));
     }
 
+    static Vector2 CenterlineTangentNear(List<Vector2> cl, Vector2 p)
+    {
+        int best = 0; float bd = float.MaxValue;
+        for (int i = 0; i + 1 < cl.Count; i++)
+        {
+            var ab = cl[i + 1] - cl[i];
+            float t = Mathf.Clamp01(Vector2.Dot(p - cl[i], ab) / ab.sqrMagnitude);
+            float d = (cl[i] + ab * t - p).sqrMagnitude;
+            if (d < bd) { bd = d; best = i; }
+        }
+        return (cl[best + 1] - cl[best]).normalized;
+    }
+
     [Test] public void Curve_FanSteps_TreadOnCenterline()
     {
         var r = Compute(Stair(P(0, 0), P(0, 3, StairPointKind.Smooth), P(3, 3)));
         Assert.IsTrue(r.ok, r.error);
         Assert.AreEqual(16, r.pieces.Count);
         Assert.IsFalse(r.pieces.Exists(p => p.kind == StairPieceKind.Landing));
-        // The midpoint of each riser edge lies on the centerline; consecutive ones are one tread apart.
-        for (int i = 1; i < r.pieces.Count; i++)
-        {
-            var a = (r.pieces[i - 1].frontA + r.pieces[i - 1].frontB) * 0.5f;
-            var b = (r.pieces[i].frontA + r.pieces[i].frontB) * 0.5f;
-            Assert.AreEqual(0.28f, (b - a).magnitude, 0.02f, "piece " + i);
-        }
         Assert.Greater(r.centerline.Count, 3);
+        int curved = 0;
+        for (int i = 0; i < r.pieces.Count; i++)
+        {
+            var p = r.pieces[i];
+            var mid = (p.frontA + p.frontB) * 0.5f;
+            var edge = p.frontB - p.frontA;
+            // Each riser edge is perpendicular to the centerline at its midpoint.
+            float perp = Vector2.Angle(edge, CenterlineTangentNear(r.centerline, mid));
+            Assert.AreEqual(90f, perp, 2f, "perpendicular, piece " + i);
+            if (i == 0) continue;
+            var prev = r.pieces[i - 1];
+            var prevMid = (prev.frontA + prev.frontB) * 0.5f;
+            Assert.AreEqual(0.28f, (mid - prevMid).magnitude, 0.02f, "tread, piece " + i);
+            // On the bend (previous riser rotated 10°..80° from the first one) consecutive risers fan out.
+            float turned = Vector2.Angle(r.pieces[0].frontB - r.pieces[0].frontA, prev.frontB - prev.frontA);
+            if (turned > 10f && turned < 80f)
+            {
+                Assert.Greater(Vector2.Angle(prev.frontB - prev.frontA, edge), 1f, "fan, piece " + i);
+                curved++;
+            }
+        }
+        Assert.GreaterOrEqual(curved, 3);
+    }
+
+    static bool IsSimplePolygon(List<Vector2> p)
+    {
+        int n = p.Count;
+        for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++)
+            {
+                if (j == i + 1 || (i == 0 && j == n - 1)) continue;
+                Vector2 a = p[i], b = p[(i + 1) % n], c = p[j], d = p[(j + 1) % n];
+                float d1 = Cr(b - a, c - a), d2 = Cr(b - a, d - a), d3 = Cr(d - c, a - c), d4 = Cr(d - c, b - c);
+                if (d1 * d2 <= 0f && d3 * d4 <= 0f &&
+                    Mathf.Max(Mathf.Min(a.x, b.x), Mathf.Min(c.x, d.x)) <= Mathf.Min(Mathf.Max(a.x, b.x), Mathf.Max(c.x, d.x)) + 1e-6f &&
+                    Mathf.Max(Mathf.Min(a.y, b.y), Mathf.Min(c.y, d.y)) <= Mathf.Min(Mathf.Max(a.y, b.y), Mathf.Max(c.y, d.y)) + 1e-6f)
+                    return false;
+            }
+        return true;
+    }
+
+    static float Cr(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
+
+    static void AssertHoleCoversNeeded(StairLayoutResult r)
+    {
+        Assert.IsNotNull(r.hole);
+        Assert.Greater(Triangulator.SignedArea(r.hole), 0f);
+        Assert.IsTrue(IsSimplePolygon(r.hole), "hole is simple");
+        foreach (var p in r.pieces)
+            if (p.clearance < StairLayout.Headroom)
+                Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(p.polygon), r.hole), "piece at " + Centroid(p.polygon));
+    }
+
+    [Test] public void Hole_UStairTouchingFlights_IsUnionNotHull()
+    {
+        var r = Compute(Stair(P(0, 0), P(0, 4), P(1, 4), P(1, 0)));
+        Assert.IsTrue(r.ok, r.error);
+        Assert.AreEqual(2, r.pieces.FindAll(p => p.kind == StairPieceKind.Landing).Count);
+        AssertHoleCoversNeeded(r);
+        Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.arrivalZone), r.hole));
+        float pieceArea = 0f;
+        foreach (var p in r.pieces) if (p.clearance < StairLayout.Headroom) pieceArea += Triangulator.SignedArea(p.polygon);
+        Assert.AreEqual(pieceArea, Triangulator.SignedArea(r.hole), 1e-2f);
+    }
+
+    [Test] public void Hole_LStair_SpansLanding()
+    {
+        var r = Compute(Stair(P(0, 0), P(0, 2), P(3, 2)));
+        var land = r.pieces.Find(p => p.kind == StairPieceKind.Landing);
+        Assert.Less(land.clearance, StairLayout.Headroom);
+        AssertHoleCoversNeeded(r);
+        Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(land.polygon), r.hole));
+        Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.arrivalZone), r.hole));
+    }
+
+    [Test] public void LShapeLeftTurn_HasOneLandingAtCorner()
+    {
+        var r = Compute(Stair(P(0, 0), P(0, 2), P(-3, 2)));
+        Assert.IsTrue(r.ok, r.error);
+        int li = r.pieces.FindIndex(p => p.kind == StairPieceKind.Landing);
+        Assert.AreEqual(1, r.pieces.FindAll(p => p.kind == StairPieceKind.Landing).Count);
+        var land = r.pieces[li].polygon;
+        Assert.Greater(Triangulator.SignedArea(land), 0f);
+        foreach (var c in new[] { new Vector2(-0.5f, 1.5f), new Vector2(0.5f, 1.5f), new Vector2(0.5f, 2.5f), new Vector2(-0.5f, 2.5f) })
+            Assert.IsTrue(InsideOrOn(land, c), "corner " + c);
+        float extent = MaxY(land) - MinY(land);
+        Assert.GreaterOrEqual(extent, 1.0f - Eps);
+        Assert.Less(extent, 1.28f);
+        var next = r.pieces[li + 1];
+        Assert.AreEqual(-0.5f, next.frontA.x, Eps);
+        Assert.AreEqual(-0.5f, next.frontB.x, Eps);
+        Assert.AreEqual(1.5f, next.frontA.y, Eps); // left of (-1,0) is (0,-1)
+        float prevX = -0.5f;
+        for (int i = li + 2; i < r.pieces.Count; i++)
+        {
+            float x = (r.pieces[i].frontA.x + r.pieces[i].frontB.x) * 0.5f;
+            Assert.Less(x, prevX);
+            prevX = x;
+        }
+        Assert.AreEqual(-1f, r.endDir.x, Eps);
+        Assert.AreEqual(0f, r.endDir.y, Eps);
+        AssertHoleCoversNeeded(r);
+    }
+
+    [Test] public void CornersCloserThanWidth_AreRouteInvalid()
+    {
+        var r = Compute(Stair(P(0, 0), P(0, 4), P(0.8f, 4), P(0.8f, 0)));
+        Assert.IsFalse(r.ok);
+        Assert.AreEqual("RouteInvalid", r.error);
+        Assert.IsTrue(Compute(Stair(P(0, 0), P(0, 4), P(1f, 4), P(1f, 0))).ok);
     }
 
     [Test] public void Hole_CoversPiecesWithLowClearance()
