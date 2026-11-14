@@ -125,4 +125,54 @@ public class StairDrawSessionTests
         Assert.AreEqual(0, data.stairs.Count);
         Assert.AreEqual(2, s.Points.Count); // nothing lost: a floor can still be added
     }
+
+    [Test] public void FinishWithHover_AppendsAcceptedHoverPoint()
+    {
+        // Enter finishes with the hovered point, so the stair matches the preview.
+        var data = TwoFloors();
+        var s = new StairDrawSession(0);
+        s.Click(new Vector2(0, 0), false);
+        s.Click(new Vector2(0, 3), false);
+        var hover = new StairPoint { position = new Vector2(3, 3), kind = StairPointKind.Smooth };
+        var preview = s.Preview(data, hover);
+        var created = s.Finish(data, hover);
+        Assert.IsNotNull(created);
+        CollectionAssert.AreEqual(preview.route, created.route);
+        Assert.AreEqual(3, created.route.Count);
+        Assert.AreEqual(0, s.Points.Count);
+    }
+
+    [Test] public void FinishWithHover_OnLastPoint_AddsNothing()
+    {
+        var data = TwoFloors();
+        var s = new StairDrawSession(0);
+        s.Click(new Vector2(0, 0), false);
+        s.Click(new Vector2(0, 3), false);
+        var created = s.Finish(data, new StairPoint { position = new Vector2(0.004f, 3) });
+        Assert.IsNotNull(created);
+        Assert.AreEqual(2, created.route.Count);
+        Assert.AreEqual(new Vector2(0, 3), created.route[1].position);
+    }
+
+    [Test] public void FinishWithHover_SingleClickedPointPlusHover_Finishes()
+    {
+        var data = TwoFloors();
+        var s = new StairDrawSession(0);
+        s.Click(new Vector2(0, 0), false);
+        var created = s.Finish(data, new StairPoint { position = new Vector2(0, 3) });
+        Assert.IsNotNull(created);
+        Assert.AreEqual(2, created.route.Count);
+    }
+
+    [Test] public void FinishWithHover_Failing_KeepsSessionUnchanged()
+    {
+        var data = new BuildingData();
+        data.AddFloor();
+        var s = new StairDrawSession(0);
+        s.Click(new Vector2(0, 0), false);
+        s.Click(new Vector2(4, 0), false);
+        Assert.IsNull(s.Finish(data, new StairPoint { position = new Vector2(4, 4) }));
+        Assert.AreEqual(2, s.Points.Count); // the hover point was not kept
+        Assert.AreEqual(0, data.stairs.Count);
+    }
 }

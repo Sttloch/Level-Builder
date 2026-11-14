@@ -14,14 +14,18 @@ namespace LevelBuilder.Geometry
         /// continue ±90°. Departure: the same with the first flight. Within each step the side leaving more free
         /// distance to the walls is tried first. Returns false when the stair needs no fix or nothing works.
         /// </summary>
+        /// <summary>True when the validation has an issue TryFix works on (a blocked arrival or departure zone).</summary>
+        public static bool CanTry(StairValidation v) =>
+            v != null && (v.issues.Contains(StairIssue.ArrivalBlocked) || v.issues.Contains(StairIssue.DepartureBlocked));
+
         public static bool TryFix(BuildingData data, StairData s, out List<StairPoint> fixedRoute)
         {
             fixedRoute = null;
             if (data == null || s == null || s.route == null) return false;
             var cur = StairValidator.Validate(data, s);
             if (!cur.layout.ok) return false;
+            if (!CanTry(cur)) return false;
             bool arrival = cur.issues.Contains(StairIssue.ArrivalBlocked);
-            if (!arrival && !cur.issues.Contains(StairIssue.DepartureBlocked)) return false;
 
             var route = new List<StairPoint>(s.route);
             if (arrival && !Stage(data, s, true, ref route, ref cur)) return false;

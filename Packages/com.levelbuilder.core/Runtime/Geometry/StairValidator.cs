@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace LevelBuilder.Geometry
 {
-    public enum StairIssue { RouteInvalid, NoFloorAbove, DepartureBlocked, ArrivalBlocked, Collision, HoleCrossesWall }
+    public enum StairIssue { RouteInvalid, NoFloorAbove, DepartureBlocked, ArrivalBlocked, Collision, HoleCrossesWall, HoleOutsideFloor }
 
     public class StairValidation
     {
@@ -13,12 +13,19 @@ namespace LevelBuilder.Geometry
         public bool Valid => issues.Count == 0;
     }
 
-    /// <summary>Checks a stair against the walls and floor regions of floors N and N+1.</summary>
+    /// <summary>
+    /// Checks a stair against the walls, floor regions and floor-level door clearances of floors N and N+1 and
+    /// against the other stairs: their pieces on the same floor and their slab holes.
+    /// </summary>
     public static class StairValidator
     {
         /// <summary>Overlaps up to this depth count as touching, not cutting.</summary>
         const float TouchTol = 1e-4f;
         const float OnEdgeTol = 1e-3f;
+        /// <summary>Free depth kept in front of a floor-level door or empty opening, on both sides of the wall.</summary>
+        public const float DoorClearance = 1.0f;
+        /// <summary>Openings with a sill up to this height count as floor level.</summary>
+        const float FloorSillTol = 0.01f;
 
         public static StairValidation Validate(BuildingData data, StairData s)
         {
@@ -45,15 +52,77 @@ namespace LevelBuilder.Geometry
             var regionsN = PlanarFaces.Compute(from).regions;
             var regionsUp = PlanarFaces.Compute(to).regions;
 
-            if (CutsAny(L.departureZone, wallsN) || !InsideOneRegion(L.departureZone, regionsN))
+            // Floor N: walls, door clearances, pieces of the other stairs leaving N and holes of the stairs arriving
+            // at N. Floor N+1: the same for the stairs leaving / arriving at N+1.
+            var obstaclesN = new List<List<Vector2>>(wallsN);
+            obstaclesN.AddRange(DoorClearances(from));
+            var obstaclesUp = new List<List<Vector2>>(wallsUp);
+            obstaclesUp.AddRange(DoorClearances(to));
+            var holesUp = new List<List<Vector2>>();
+            foreach (var o in data.stairs ?? new List<StairData>())
+            {
+                // Same id: the stair itself (e.g. a candidate route of it being validated), never an obstacle.
+                if (o == null || ReferenceEquals(o, s) || (!string.IsNullOrEmpty(s.id) && o.id == s.id)) continue;
+                int ofi = data.FloorIndex(o.fromFloorId), oti = data.FloorIndex(o.toFloorId);
+                if (ofi < 0 || oti != ofi + 1) continue;
+                if (ofi != fi && ofi != ti && oti != fi && oti != ti) continue;
+                var ol = StairLayout.Compute(o, data.floors[ofi], data.floors[oti]);
+                if (!ol.ok) continue;
+                foreach (var p in ol.pieces)
+                {
+                    if (ofi == fi) obstaclesN.Add(p.polygon);
+                    if (ofi == ti) obstaclesUp.Add(p.polygon);
+                }
+                if (ol.hole == null) continue;
+                if (oti == fi) obstaclesN.Add(ol.hole);
+                if (oti == ti) { obstaclesUp.Add(ol.hole); holesUp.Add(ol.hole); }
+            }
+
+            if (CutsAny(L.departureZone, obstaclesN) || !InsideOneRegion(L.departureZone, regionsN))
                 v.issues.Add(StairIssue.DepartureBlocked);
-            if (CutsAny(L.arrivalZone, wallsUp) || !InsideOneRegion(L.arrivalZone, regionsUp))
+            // Arriving over its own hole is no arrival either.
+            if (CutsAny(L.arrivalZone, obstaclesUp) || !InsideOneRegion(L.arrivalZone, regionsUp) ||
+                (L.hole != null && CutsAny(L.arrivalZone, new List<List<Vector2>> { L.hole })))
                 v.issues.Add(StairIssue.ArrivalBlocked);
             foreach (var p in L.pieces)
-                if (CutsAny(p.polygon, wallsN)) { v.issues.Add(StairIssue.Collision); break; }
-            if (L.hole != null && (CutsAny(L.hole, wallsUp) || !InsideOneRegion(L.hole, regionsUp)))
-                v.issues.Add(StairIssue.HoleCrossesWall);
+                if (CutsAny(p.polygon, obstaclesN)) { v.issues.Add(StairIssue.Collision); break; }
+            if (L.hole != null)
+            {
+                if (CutsAny(L.hole, wallsUp) || CutsAny(L.hole, holesUp)) v.issues.Add(StairIssue.HoleCrossesWall);
+                else if (!InsideOneRegion(L.hole, regionsUp)) v.issues.Add(StairIssue.HoleOutsideFloor);
+            }
             return v;
+        }
+
+        /// <summary>
+        /// CCW rectangle in front of each valid floor-level door or empty opening: the opening's width by
+        /// DoorClearance beyond each face of the wall (through the wall).
+        /// </summary>
+        internal static List<List<Vector2>> DoorClearances(FloorData f)
+        {
+            var list = new List<List<Vector2>>();
+            if (f == null || f.segments == null) return list;
+            foreach (var kv in OpeningLayout.Compute(f))
+            {
+                var seg = f.GetSegment(kv.Key);
+                var na = seg != null ? f.GetNode(seg.startNodeId) : null;
+                var nb = seg != null ? f.GetNode(seg.endNodeId) : null;
+                if (na == null || nb == null) continue;
+                var d = nb.position - na.position;
+                if (d.magnitude < 1e-6f) continue;
+                d.Normalize();
+                var n = new Vector2(-d.y, d.x) * (seg.thickness * 0.5f + DoorClearance);
+                foreach (var r in kv.Value)
+                {
+                    var o = r.opening;
+                    if (!r.valid || o == null || (o.type != OpeningType.Door && o.type != OpeningType.Empty)) continue;
+                    if (!(Mathf.Abs(o.sill) <= FloorSillTol)) continue;
+                    var a = na.position + d * r.u0;
+                    var b = na.position + d * r.u1;
+                    list.Add(new List<Vector2> { a - n, b - n, b + n, a + n });
+                }
+            }
+            return list;
         }
 
         /// <summary>CCW rectangle of each wall: segment ± thickness/2, ends not extended.</summary>

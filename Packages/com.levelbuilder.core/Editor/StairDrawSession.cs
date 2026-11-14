@@ -7,7 +7,7 @@ namespace LevelBuilder.Editor
     /// Point-by-point drawing of a stair route from floor FromFloorIndex to the one above. Pure logic: the caller
     /// handles snapping, Undo and repaint. Nothing touches the data until Finish(), which adds the stair with
     /// BuildingData.AddStair (the caller wraps it in one Undo step). A click closer than MinPointDistance to the
-    /// previous point is ignored (so the second click of a double click adds nothing).
+    /// previous point is ignored.
     /// </summary>
     public class StairDrawSession
     {
@@ -72,6 +72,20 @@ namespace LevelBuilder.Editor
         /// Adds the stair to data and resets the session. Null (session kept) with fewer than two points or without a
         /// floor above.
         /// </summary>
+        /// <summary>
+        /// Like Finish(data), with extra (the hovered point) appended first when it would be a new point, so the
+        /// stair matches the preview. On failure the session is left as it was (extra not kept).
+        /// </summary>
+        public StairData Finish(BuildingData data, StairPoint extra)
+        {
+            if (data == null) return null;
+            bool added = Accepts(extra.position);
+            if (added) points.Add(extra);
+            var s = Finish(data);
+            if (s == null && added) points.RemoveAt(points.Count - 1);
+            return s;
+        }
+
         public StairData Finish(BuildingData data)
         {
             if (!CanFinish || data == null) return null;

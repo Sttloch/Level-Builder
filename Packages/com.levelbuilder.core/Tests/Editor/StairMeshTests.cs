@@ -12,7 +12,7 @@ public class StairMeshTests
         new StairPoint { position = new Vector2(x, y), kind = k };
 
     static StairData Stair(params StairPoint[] pts) =>
-        new StairData { id = "s", route = new List<StairPoint>(pts) };
+        new StairData { id = "s", width = 1f, route = new List<StairPoint>(pts) };
 
     static StairLayoutResult Layout(StairData s)
     {

@@ -20,7 +20,7 @@ namespace LevelBuilder
         public string fromFloorId;
         public string toFloorId;
         public List<StairPoint> route = new List<StairPoint>();
-        public float width = 1f;
+        public float width = 1.2f;
         public float riserTarget = 0.18f;
         public float tread = 0.28f;
         public bool railLeft = true;

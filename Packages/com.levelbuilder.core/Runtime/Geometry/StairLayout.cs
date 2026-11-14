@@ -43,6 +43,16 @@ namespace LevelBuilder.Geometry
     public static class StairLayout
     {
         public const float Headroom = 2.1f;
+        /// <summary>
+        /// Extra free height the hole leaves over a character capsule (skin and slope lift of a default
+        /// CharacterController).
+        /// </summary>
+        public const float CapsuleAllowance = 0.15f;
+        /// <summary>
+        /// Extra free height over the hole edge when the steps themselves are the walking surface (no collision
+        /// ramp): a CharacterController climbs a step by first moving up by its step offset (0.3 by default).
+        /// </summary>
+        public const float StepAllowance = 0.3f;
         public const float CornerAngle = 30f;
         /// <summary>Largest turn a single Corner point may make (U-stairs use two corners).</summary>
         public const float MaxCornerTurn = 150f;
@@ -153,6 +163,9 @@ namespace LevelBuilder.Geometry
                 r.pieces.Add(piece);
             }
 
+            // 4. A route that runs back over itself (non-adjacent pieces overlapping) is not buildable.
+            if (SelfOverlaps(r.pieces)) return Fail(r, "RouteInvalid");
+
             r.runLength = sPos;
             r.startDir = cl.Tangent(0f);
             r.endDir = cl.Tangent(sPos);
@@ -167,7 +180,14 @@ namespace LevelBuilder.Geometry
             r.arrivalZone = new List<Vector2> { r.topB, r.topB + fwd, r.topA + fwd, r.topA };
 
             // 6. Hole: boundary of the union of the pieces that lack headroom (the last riser has no plan area).
-            int first = r.pieces.FindIndex(p => p.clearance < Headroom);
+            // A piece needs the hole when the free height above the NEXT step up is under Headroom +
+            // CapsuleAllowance: the slab edge sits on the piece's front edge, where the walking surface (ramp
+            // through the nosings) is already at the piece's height, so the previous piece, left out, guarantees
+            // that much free height under the edge.
+            // Without the collision ramp the character climbs the steps themselves and needs StepAllowance more.
+            float riser = r.riser;
+            float need = Headroom + CapsuleAllowance + (s.collisionRamp ? 0f : StepAllowance);
+            int first = r.pieces.FindIndex(p => p.clearance - riser < need);
             if (first >= 0)
             {
                 var polys = new List<List<Vector2>>();
@@ -183,6 +203,33 @@ namespace LevelBuilder.Geometry
 
             r.ok = true;
             return r;
+        }
+
+        /// <summary>True when two non-adjacent pieces overlap deeper than the validator's touch tolerance.</summary>
+        static bool SelfOverlaps(List<StairPiece> pieces)
+        {
+            int n = pieces.Count;
+            if (n < 3) return false;
+            var min = new Vector2[n];
+            var max = new Vector2[n];
+            var parts = new List<List<Vector2>>[n];
+            for (int i = 0; i < n; i++)
+            {
+                min[i] = new Vector2(float.MaxValue, float.MaxValue);
+                max[i] = new Vector2(float.MinValue, float.MinValue);
+                foreach (var v in pieces[i].polygon) { min[i] = Vector2.Min(min[i], v); max[i] = Vector2.Max(max[i], v); }
+            }
+            for (int i = 0; i < n; i++)
+                for (int j = i + 2; j < n; j++)
+                {
+                    if (min[i].x >= max[j].x || min[j].x >= max[i].x || min[i].y >= max[j].y || min[j].y >= max[i].y) continue;
+                    if (parts[i] == null) parts[i] = StairValidator.ConvexParts(pieces[i].polygon);
+                    if (parts[j] == null) parts[j] = StairValidator.ConvexParts(pieces[j].polygon);
+                    foreach (var a in parts[i])
+                        foreach (var b in parts[j])
+                            if (StairValidator.ConvexOverlap(a, b)) return true;
+                }
+            return false;
         }
 
         static StairLayoutResult Fail(StairLayoutResult r, string error)

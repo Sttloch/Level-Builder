@@ -261,7 +261,8 @@ namespace LevelBuilder
         // ---- Stairs ----
 
         // fromSide: holes of the stairs leaving this floor (its ceiling); otherwise of those arriving (its floor slab).
-        // Only stairs with a valid layout whose hole does not cross a wall of the upper floor cut the slabs.
+        // Only stairs with a valid layout whose hole lies inside one region of the upper floor, crossing no wall and
+        // no other stair's hole, cut the slabs.
         List<IList<Vector2>> StairHoles(string floorId, bool fromSide)
         {
             List<IList<Vector2>> holes = null;
@@ -270,7 +271,8 @@ namespace LevelBuilder
                 if (s == null || (fromSide ? s.fromFloorId : s.toFloorId) != floorId) continue;
                 if (!TryGetStairValidation(s, out var v)) continue;
                 var l = v.layout;
-                if (l == null || !l.ok || l.hole == null || l.hole.Count < 3 || v.issues.Contains(StairIssue.HoleCrossesWall)) continue;
+                if (l == null || !l.ok || l.hole == null || l.hole.Count < 3 ||
+                    v.issues.Contains(StairIssue.HoleCrossesWall) || v.issues.Contains(StairIssue.HoleOutsideFloor)) continue;
                 (holes ?? (holes = new List<IList<Vector2>>())).Add(l.hole);
             }
             return holes;
@@ -303,22 +305,30 @@ namespace LevelBuilder
                 }
                 if (s.collisionRamp)
                 {
-                    // Collider only: no MeshFilter/MeshRenderer. The mesh is DontSave and found through the collider
-                    // when the floor is destroyed.
-                    var ramp = NewChild(go.transform, "Ramp");
-                    var mc = ramp.AddComponent<MeshCollider>();
-                    var md = StairMeshBuilder.Ramp(l, baseY, id: s.id);
-                    if (md.vertices.Count > 0)
-                    {
-                        var mesh = md.ToMesh();
-                        mesh.hideFlags = GenFlags;
-                        mesh.name = "Ramp";
-                        mc.sharedMesh = mesh;
-                    }
+                    // Colliders only: no MeshFilter/MeshRenderer. The meshes are DontSave and found through the
+                    // colliders when the floor is destroyed. The ramp is the walking surface; the steps' side faces
+                    // keep a character beside the stair out of the solid block.
+                    AddColliderMesh(NewChild(go.transform, "Ramp"), "Ramp", StairMeshBuilder.Ramp(l, baseY, id: s.id));
+                    AddColliderMesh(NewChild(go.transform, "StepsSides"), "StepsSides", StairMeshBuilder.StepSides(s, l, baseY));
                 }
                 if (s.railLeft || s.railRight)
-                    AddPart(go.transform, "Rails", StairMeshBuilder.Rails(s, l, baseY));
+                {
+                    // Visual rail (inset into the stair) without its own collider: thin boxes just outside the
+                    // footprint block instead, so the whole width stays walkable.
+                    var rails = AddMeshObject(go.transform, "Rails", StairMeshBuilder.Rails(s, l, baseY), BaseMaterial, out _);
+                    AddColliderMesh(rails, "RailColliders", StairMeshBuilder.RailColliders(s, l, baseY));
+                }
             }
+        }
+
+        static void AddColliderMesh(GameObject go, string meshName, MeshData md)
+        {
+            var mc = go.AddComponent<MeshCollider>();
+            if (md.vertices.Count == 0) return;
+            var mesh = md.ToMesh();
+            mesh.hideFlags = GenFlags;
+            mesh.name = meshName;
+            mc.sharedMesh = mesh;
         }
 
         Material BaseMaterial => defaultMaterial != null ? defaultMaterial : DefaultMaterial();

@@ -10,7 +10,8 @@ namespace LevelBuilder.Geometry
     /// floor slab "region:{key}/floor" (top), "/floor/under", "/floor/edge"; ceiling "region:{key}/ceiling";
     /// roof slab (top floor) "region:{key}/roof" (top), "/roof/edge".
     /// Region holes (pillars) are cut out of every horizontal face; the optional extra holes (stair wells)
-    /// cut the floor slab (top, underside and edges) and the ceiling, never the roof slab.
+    /// cut the floor slab (top, underside and edges) and the ceiling, never the roof slab. Each extra hole cuts
+    /// only the region that fully contains it; a hole contained in no region is skipped.
     /// </summary>
     public static class SlabMeshBuilder
     {
@@ -66,7 +67,13 @@ namespace LevelBuilder.Geometry
             // Holes wound CW, so the right-hand normal of every contour faces away from the slab.
             holes = new List<IList<Vector2>>();
             foreach (var h in r.holes) holes.Add(Clockwise(h));
-            if (extraHoles != null) foreach (var h in extraHoles) holes.Add(Clockwise(h));
+            if (extraHoles != null)
+            {
+                var self = new List<Region> { r };
+                foreach (var h in extraHoles)
+                    if (h != null && h.Count >= 3 && StairValidator.InsideOneRegion(new List<Vector2>(h), self))
+                        holes.Add(Clockwise(h));
+            }
 
             tris = Triangulator.Triangulate(outer, holes, out verts);
             return tris.Count > 0;

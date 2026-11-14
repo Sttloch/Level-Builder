@@ -57,6 +57,26 @@ namespace LevelBuilder.Geometry
             return md;
         }
 
+        /// <summary>
+        /// Only the "/side" faces of <see cref="Steps"/>: the collider that keeps a character beside the stair
+        /// out of the solid steps while the collision ramp (no side walls) is the walking surface.
+        /// </summary>
+        public static MeshData StepSides(StairData s, StairLayoutResult l, float baseY)
+        {
+            var all = Steps(s, l, baseY);
+            var md = new MeshData();
+            var g = s != null ? all.groups.Find(x => x.key == "stair:" + s.id + "/side") : null;
+            if (g == null) return md;
+            var tri = new[] { 0, 1, 2 };
+            for (int i = 0; i + 2 < g.triangles.Count; i += 3)
+            {
+                int a = g.triangles[i], b = g.triangles[i + 1], c = g.triangles[i + 2];
+                md.AddFace(g.key, new[] { all.vertices[a], all.vertices[b], all.vertices[c] },
+                    new[] { all.uvs[a], all.uvs[b], all.uvs[c] }, tri, all.normals[a]);
+            }
+            return md;
+        }
+
         // ---------------------------------------------------------------- Ramp
 
         /// <summary>
@@ -213,6 +233,49 @@ namespace LevelBuilder.Geometry
             return md;
         }
 
+        /// <summary>
+        /// Rail collision: per enabled side and per rail path segment, a closed thin box just OUTSIDE the stair
+        /// footprint (from the stair edge outwards by <paramref name="thickness"/>, mitred at the corners), from the
+        /// pieces' height up to the rail top. Keeping it outside leaves the full stair width walkable.
+        /// </summary>
+        public static MeshData RailColliders(StairData s, StairLayoutResult l, float baseY, float height = 0.9f, float thickness = 0.03f)
+        {
+            var md = new MeshData();
+            if (s == null || l == null || !l.ok || l.pieces.Count == 0 || !(thickness > 0f)) return md;
+            string key = "stair:" + s.id + "/railCollider";
+            if (s.railLeft) BuildRailCollider(md, key, l, baseY, height, thickness, true);
+            if (s.railRight) BuildRailCollider(md, key, l, baseY, height, thickness, false);
+            return md;
+        }
+
+        static void BuildRailCollider(MeshData md, string key, StairLayoutResult l, float baseY, float height, float th, bool left)
+        {
+            var verts = RailPath(l, baseY, height, left);
+            if (verts.Count < 2) return;
+            var inward = RailInward(verts, l, left);
+            for (int i = 0; i + 1 < verts.Count; i++)
+            {
+                RailVertex v0 = verts[i], v1 = verts[i + 1];
+                Vector2 i0 = v0.p, i1 = v1.p, o0 = v0.p - inward[i] * th, o1 = v1.p - inward[i + 1] * th;
+                var dirIn = new Vector3(inward[i].x + inward[i + 1].x, 0f, inward[i].y + inward[i + 1].y);
+                var along = new Vector3(v1.p.x - v0.p.x, 0f, v1.p.y - v0.p.y);
+                // Inner, outer, top, bottom.
+                AddTriXZ(md, key, V(i0, v0.floorY), V(i1, v1.floorY), V(i1, v1.railY), dirIn);
+                AddTriXZ(md, key, V(i0, v0.floorY), V(i1, v1.railY), V(i0, v0.railY), dirIn);
+                AddTriXZ(md, key, V(o0, v0.floorY), V(o1, v1.floorY), V(o1, v1.railY), -dirIn);
+                AddTriXZ(md, key, V(o0, v0.floorY), V(o1, v1.railY), V(o0, v0.railY), -dirIn);
+                AddTriXZ(md, key, V(i0, v0.railY), V(i1, v1.railY), V(o1, v1.railY), Vector3.up);
+                AddTriXZ(md, key, V(i0, v0.railY), V(o1, v1.railY), V(o0, v0.railY), Vector3.up);
+                AddTriXZ(md, key, V(i0, v0.floorY), V(i1, v1.floorY), V(o1, v1.floorY), Vector3.down);
+                AddTriXZ(md, key, V(i0, v0.floorY), V(o1, v1.floorY), V(o0, v0.floorY), Vector3.down);
+                // End caps.
+                AddTriXZ(md, key, V(i0, v0.floorY), V(o0, v0.floorY), V(o0, v0.railY), -along);
+                AddTriXZ(md, key, V(i0, v0.floorY), V(o0, v0.railY), V(i0, v0.railY), -along);
+                AddTriXZ(md, key, V(i1, v1.floorY), V(o1, v1.floorY), V(o1, v1.railY), along);
+                AddTriXZ(md, key, V(i1, v1.floorY), V(o1, v1.railY), V(i1, v1.railY), along);
+            }
+        }
+
         struct RailVertex
         {
             public Vector2 p;       // on the stair edge
@@ -221,7 +284,11 @@ namespace LevelBuilder.Geometry
             public bool post;
         }
 
-        static void BuildRail(MeshData md, string key, StairLayoutResult l, float baseY, float height, float bar, bool left)
+        /// <summary>
+        /// Rail path along one side: a vertex on the stair edge at each piece's front corner (plus a landing's
+        /// intermediate side corners) and at the last riser's corner, with the floor and rail-top heights there.
+        /// </summary>
+        static List<RailVertex> RailPath(StairLayoutResult l, float baseY, float height, bool left)
         {
             float H = l.risers * l.riser;
             var verts = new List<RailVertex>();
@@ -246,9 +313,12 @@ namespace LevelBuilder.Geometry
             {
                 p = left ? l.topA : l.topB, floorY = baseY + lastPiece.height, railY = baseY + H + height, post = true,
             });
-            if (verts.Count < 2) return;
+            return verts;
+        }
 
-            // Plan offsets: inward unit vectors (towards the other side), mitred at interior vertices.
+        /// <summary>Inward vectors (towards the other side) at each rail vertex, mitred at interior vertices.</summary>
+        static Vector2[] RailInward(List<RailVertex> verts, StairLayoutResult l, bool left)
+        {
             int n = verts.Count;
             var inward = new Vector2[n];
             var startEdge = (left ? l.bottomB - l.bottomA : l.bottomA - l.bottomB).normalized;
@@ -262,6 +332,15 @@ namespace LevelBuilder.Geometry
                 float c = 1f + Vector2.Dot(n1, n2);
                 inward[i] = c > 1e-3f ? (n1 + n2) / c : n1;
             }
+            return inward;
+        }
+
+        static void BuildRail(MeshData md, string key, StairLayoutResult l, float baseY, float height, float bar, bool left)
+        {
+            var verts = RailPath(l, baseY, height, left);
+            if (verts.Count < 2) return;
+            int n = verts.Count;
+            var inward = RailInward(verts, l, left);
 
             float hb = bar * 0.5f;
             var center = new Vector2[n];

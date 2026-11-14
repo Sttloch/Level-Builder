@@ -245,4 +245,139 @@ public class StairRendererTests
         Assert.IsNull(StairObj(s.id));
         Assert.AreEqual(60f, FaceArea("Floor 1/Floor", Vector3.up, b.data.floors[1].elevation), 1e-2f);
     }
+
+    // ---------------------------------------------------------------- final review fixes
+
+    [Test] public void RailColliders_AreThinBoxesOutsideTheFootprint()
+    {
+        TwoFloors();
+        var s = AddStair(); // default width 1.2 along +x at y = 2
+        Assert.AreEqual(1.2f, s.width, 1e-5f);
+        r.Regenerate();
+        var rails = StairObj(s.id, "Rails");
+        var mf = rails.GetComponent<MeshFilter>();
+        var mc = rails.GetComponent<MeshCollider>();
+        Assert.IsNotNull(mc);
+        Assert.IsNotNull(mc.sharedMesh);
+        Assert.AreNotSame(mf.sharedMesh, mc.sharedMesh, "collider is not the visual rail mesh");
+        Assert.AreEqual(HideFlags.DontSave, mc.sharedMesh.hideFlags & HideFlags.DontSave);
+        var l = r.StairValidations[s.id].layout;
+        float H = l.risers * l.riser;
+        bool left = false, right = false;
+        foreach (var v in mc.sharedMesh.vertices)
+        {
+            float off = Mathf.Abs(v.z - 2f);
+            Assert.GreaterOrEqual(off, 0.6f - 1e-3f, "inside the footprint: " + v);
+            Assert.LessOrEqual(off, 0.63f + 1e-3f, "too thick: " + v);
+            Assert.GreaterOrEqual(v.x, 1.5f - 1e-3f);
+            Assert.LessOrEqual(v.x, 5.98f + 1e-3f);
+            Assert.LessOrEqual(v.y, H + 0.9f + 1e-3f);
+            if (v.z > 2f) left = true; else right = true;
+        }
+        Assert.IsTrue(left && right, "one collider per side");
+        // Only the left rail: every collider vertex on the left (+z = plan +y is the left of +x).
+        s.railRight = false;
+        r.Regenerate();
+        foreach (var v in StairObj(s.id, "Rails").GetComponent<MeshCollider>().sharedMesh.vertices)
+            Assert.Greater(v.z, 2f);
+    }
+
+    [Test] public void RampOn_StepsSidesCollider_HasOnlySideFaces()
+    {
+        TwoFloors();
+        var s = AddStair();
+        r.Regenerate();
+        var sides = StairObj(s.id, "StepsSides");
+        Assert.IsNotNull(sides);
+        Assert.AreEqual(HideFlags.DontSave, sides.gameObject.hideFlags & HideFlags.DontSave);
+        Assert.IsNull(sides.GetComponent<MeshRenderer>());
+        var mc = sides.GetComponent<MeshCollider>();
+        Assert.IsNotNull(mc);
+        Assert.IsNotNull(mc.sharedMesh);
+        Assert.AreEqual(HideFlags.DontSave, mc.sharedMesh.hideFlags & HideFlags.DontSave);
+
+        var l = r.StairValidations[s.id].layout;
+        var md = StairMeshBuilder.Steps(s, l, b.data.floors[0].elevation);
+        var sideGroup = md.groups.Find(g => g.key == "stair:" + s.id + "/side");
+        Assert.AreEqual(sideGroup.triangles.Count, mc.sharedMesh.triangles.Length, "side triangles only");
+        // Vertical faces only: no tread/landing tops.
+        var n = mc.sharedMesh.normals;
+        foreach (var nn in n) Assert.Less(Mathf.Abs(nn.y), 1e-3f);
+
+        s.collisionRamp = false;
+        r.Regenerate();
+        Assert.IsNull(StairObj(s.id, "StepsSides"), "the steps' own collider covers the sides");
+    }
+
+    static float GroupArea(MeshData md, string key)
+    {
+        var g = md.groups.Find(x => x.key == key);
+        if (g == null) return 0f;
+        float a = 0f;
+        for (int i = 0; i < g.triangles.Count; i += 3)
+        {
+            var p = md.vertices[g.triangles[i]]; var q = md.vertices[g.triangles[i + 1]]; var w = md.vertices[g.triangles[i + 2]];
+            a += Vector3.Cross(q - p, w - p).magnitude * 0.5f;
+        }
+        return a;
+    }
+
+    /// <summary>Edge quads of a group whose plan midpoint lies on the polygon's boundary.</summary>
+    static int EdgeQuadsOn(MeshData md, string key, IList<Vector2> poly)
+    {
+        var g = md.groups.Find(x => x.key == key);
+        if (g == null) return 0;
+        int count = 0;
+        for (int i = 0; i < g.triangles.Count; i += 6)
+        {
+            var a = md.vertices[g.triangles[i]]; var c = md.vertices[g.triangles[i + 1]]; var d = md.vertices[g.triangles[i + 2]];
+            var mid = new Vector2((a.x + c.x + d.x) / 3f, (a.z + c.z + d.z) / 3f);
+            if (StairValidator.DistanceToBoundary(mid, new List<Vector2>(poly)) < 1e-2f) count++;
+        }
+        return count;
+    }
+
+    [Test] public void TwoRooms_HoleOnlyCutsItsRegion([Values(false, true)] bool inRightRoom)
+    {
+        // 16x8 building split at x = 8 on both floors; the stair runs +x inside one room.
+        var f0 = b.data.AddFloor();
+        b.data.AddSegment(f0, new Vector2(0, 0), new Vector2(16, 0));
+        b.data.AddSegment(f0, new Vector2(16, 0), new Vector2(16, 8));
+        b.data.AddSegment(f0, new Vector2(16, 8), new Vector2(0, 8));
+        b.data.AddSegment(f0, new Vector2(0, 8), new Vector2(0, 0));
+        b.data.AddSegment(f0, new Vector2(8, 0), new Vector2(8, 8));
+        var f1 = b.data.AddFloor();
+        b.data.AddSegment(f1, new Vector2(8, 0), new Vector2(8, 8));
+        float x0 = inRightRoom ? 9.5f : 1.5f;
+        var s = b.data.AddStair(0, new List<StairPoint> { P(x0, 4), P(x0 + 4.5f, 4) });
+        r.Regenerate();
+        var v = r.StairValidations[s.id];
+        Assert.IsTrue(v.Valid, string.Join(",", v.issues));
+        var hole = v.layout.hole;
+        float holeArea = PolygonArea(hole);
+        var holes = new List<IList<Vector2>> { hole };
+
+        var floorMd = SlabMeshBuilder.BuildFloor(f1, holes);
+        var ceilMd = SlabMeshBuilder.BuildCeiling(b.data.floors[0], false, holes);
+        var regions1 = PlanarFaces.Compute(f1).regions;
+        var regions0 = PlanarFaces.Compute(b.data.floors[0]).regions;
+        Assert.AreEqual(2, regions1.Count);
+        Assert.AreEqual(2, regions0.Count);
+        int edgesOnHole = 0;
+        foreach (var reg in regions1)
+        {
+            bool mine = (reg.polygon[0].x + reg.polygon[1].x + reg.polygon[2].x) / 3f > 8f == inRightRoom;
+            Assert.AreEqual(mine ? 64f - holeArea : 64f, GroupArea(floorMd, "region:" + reg.key + "/floor"), 1e-2f, "floor " + reg.key);
+            Assert.AreEqual(mine ? 64f - holeArea : 64f, GroupArea(floorMd, "region:" + reg.key + "/floor/under"), 1e-2f);
+            edgesOnHole += EdgeQuadsOn(floorMd, "region:" + reg.key + "/floor/edge", hole);
+        }
+        Assert.AreEqual(hole.Count, edgesOnHole, "hole edge faces only once");
+        foreach (var reg in regions0)
+        {
+            bool mine = (reg.polygon[0].x + reg.polygon[1].x + reg.polygon[2].x) / 3f > 8f == inRightRoom;
+            Assert.AreEqual(mine ? 64f - holeArea : 64f, GroupArea(ceilMd, "region:" + reg.key + "/ceiling"), 1e-2f, "ceiling " + reg.key);
+        }
+        // The renderer's own slabs agree.
+        Assert.AreEqual(128f - holeArea, FaceArea("Floor 1/Floor", Vector3.up, b.data.floors[1].elevation), 1e-2f);
+    }
 }

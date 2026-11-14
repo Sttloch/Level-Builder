@@ -19,9 +19,10 @@ namespace LevelBuilder.Editor
                 case StairIssue.RouteInvalid: return "Ruta no válida (giro demasiado cerrado o esquinas demasiado juntas)";
                 case StairIssue.NoFloorAbove: return "No hay planta encima";
                 case StairIssue.DepartureBlocked: return "La salida está bloqueada";
-                case StairIssue.ArrivalBlocked: return "La llegada está bloqueada (pared delante)";
-                case StairIssue.Collision: return "Los escalones atraviesan una pared";
+                case StairIssue.ArrivalBlocked: return "La llegada está bloqueada";
+                case StairIssue.Collision: return "Los escalones chocan con una pared, una puerta u otra escalera";
                 case StairIssue.HoleCrossesWall: return "El hueco del techo cruza una pared";
+                case StairIssue.HoleOutsideFloor: return "No hay suelo en la planta de arriba sobre la escalera";
                 default: return issue.ToString();
             }
         }
@@ -73,10 +74,11 @@ namespace LevelBuilder.Editor
     /// <summary>
     /// Scene view tool to draw and edit stairs from the active floor to the one above.
     /// Drawing: click = Corner point, Shift+click = Smooth (curve) point, Backspace = remove the last point,
-    /// Enter / double click = finish (one Undo step "Crear escalera"), Esc = cancel. Live preview of the pieces
+    /// Enter = finish with the hovered point as the last one (what the preview shows), double click = finish at the
+    /// clicked point (one Undo step "Crear escalera"), Esc = cancel. Live preview of the pieces
     /// (green valid / red invalid, with the reasons) and the real run length. Points snap to the wall grid
     /// (Ctrl/Cmd: no snap).
-    /// Editing: click a stair to select it; drag its points to move them (one Undo step per drag); click a point to
+    /// Editing: click a stair to select it (a click on empty space only deselects); drag its points to move them (one Undo step per drag); click a point to
     /// select it (Delete removes it while at least 2 remain); Delete with no point selected deletes the stair;
     /// side handle at the start: width. Never deletes the Building. Without a floor above the active one the tool
     /// only shows a message and ignores clicks on empty space.
@@ -253,8 +255,9 @@ namespace LevelBuilder.Editor
         {
             if (Drawing)
             {
-                if (hasCursor) session.Click(cursor, e.shift);
-                if (e.clickCount >= 2) TryFinish(b, fi);
+                // The first click of a double click already added the point: the second one only finishes.
+                if (e.clickCount >= 2) TryFinish(b, fi, null);
+                else if (hasCursor) session.Click(cursor, e.shift);
                 return;
             }
 
@@ -266,19 +269,28 @@ namespace LevelBuilder.Editor
                 OpeningSelection.Clear();
                 return;
             }
-            StairSelection.Clear();
+            // A click on empty space with a stair selected only deselects it.
+            if (StairSelection.stairId != null)
+            {
+                StairSelection.Clear();
+                return;
+            }
             if (!hasAbove || !hasCursor) return; // no floor above: only the message, clicks are ignored
             WallSelection.Clear();
             OpeningSelection.Clear();
             session.Click(cursor, e.shift);
         }
 
-        void TryFinish(Building b, int fi)
+        /// <summary>Finishes the route; hover (Enter) is appended first when it is a new point, matching the preview.</summary>
+        void TryFinish(Building b, int fi, StairPoint? hover)
         {
-            if (!session.CanFinish || fi + 1 >= b.data.floors.Count) return;
+            if (fi + 1 >= b.data.floors.Count) return;
+            int count = session.Points.Count + (hover.HasValue && session.Accepts(hover.Value.position) ? 1 : 0);
+            if (count < 2) return;
             StairData created = null;
             Undo.IncrementCurrentGroup();
-            BuildingEditorUtil.Mutate(b, "Crear escalera", fi, () => created = session.Finish(b.data));
+            BuildingEditorUtil.Mutate(b, "Crear escalera", fi, () =>
+                created = hover.HasValue ? session.Finish(b.data, hover.Value) : session.Finish(b.data));
             if (created != null) StairSelection.Select(b, created.id);
             previewDirty = true;
         }
@@ -483,7 +495,10 @@ namespace LevelBuilder.Editor
                         }
                         else if (Drawing && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))
                         {
-                            TryFinish(b, fi);
+                            StairPoint? hover = null;
+                            if (hasCursor)
+                                hover = new StairPoint { position = cursor, kind = cursorSmooth ? StairPointKind.Smooth : StairPointKind.Corner };
+                            TryFinish(b, fi, hover);
                             e.Use();
                         }
                     }

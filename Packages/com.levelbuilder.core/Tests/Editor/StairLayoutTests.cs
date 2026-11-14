@@ -12,7 +12,7 @@ public class StairLayoutTests
         new StairPoint { position = new Vector2(x, y), kind = k };
 
     static StairData Stair(params StairPoint[] pts) =>
-        new StairData { id = "s", route = new List<StairPoint>(pts) };
+        new StairData { id = "s", width = 1f, route = new List<StairPoint>(pts) };
 
     static FloorData From(float height = 3f) => new FloorData { elevation = 0f, height = height, slabThickness = 0.2f };
     static FloorData To(float elevation = 3f) => new FloorData { elevation = elevation, height = 3f, slabThickness = 0.2f };
@@ -183,13 +183,20 @@ public class StairLayoutTests
 
     static float Cr(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
 
+    /// <summary>
+    /// A piece is in the hole when the free height above the NEXT step up lacks headroom plus the capsule
+    /// allowance (clearance is measured on the piece itself).
+    /// </summary>
+    static bool NeedsHole(StairLayoutResult r, StairPiece p) =>
+        p.clearance - r.riser < StairLayout.Headroom + StairLayout.CapsuleAllowance;
+
     static void AssertHoleCoversNeeded(StairLayoutResult r)
     {
         Assert.IsNotNull(r.hole);
         Assert.Greater(Triangulator.SignedArea(r.hole), 0f);
         Assert.IsTrue(IsSimplePolygon(r.hole), "hole is simple");
         foreach (var p in r.pieces)
-            if (p.clearance < StairLayout.Headroom)
+            if (NeedsHole(r, p))
                 Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(p.polygon), r.hole), "piece at " + Centroid(p.polygon));
     }
 
@@ -201,7 +208,7 @@ public class StairLayoutTests
         AssertHoleCoversNeeded(r);
         Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.arrivalZone), r.hole));
         float pieceArea = 0f;
-        foreach (var p in r.pieces) if (p.clearance < StairLayout.Headroom) pieceArea += Triangulator.SignedArea(p.polygon);
+        foreach (var p in r.pieces) if (NeedsHole(r, p)) pieceArea += Triangulator.SignedArea(p.polygon);
         Assert.AreEqual(pieceArea, Triangulator.SignedArea(r.hole), 1e-2f);
     }
 
@@ -209,7 +216,7 @@ public class StairLayoutTests
     {
         var r = Compute(Stair(P(0, 0), P(0, 2), P(3, 2)));
         var land = r.pieces.Find(p => p.kind == StairPieceKind.Landing);
-        Assert.Less(land.clearance, StairLayout.Headroom);
+        Assert.IsTrue(NeedsHole(r, land));
         AssertHoleCoversNeeded(r);
         Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(land.polygon), r.hole));
         Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.arrivalZone), r.hole));
@@ -261,7 +268,7 @@ public class StairLayoutTests
         Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.pieces[0].polygon), r.hole));
         int inHole = 0;
         foreach (var p in r.pieces)
-            if (p.clearance < StairLayout.Headroom)
+            if (NeedsHole(r, p))
             {
                 Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(p.polygon), r.hole));
                 inHole++;
@@ -277,8 +284,8 @@ public class StairLayoutTests
         var a = Compute(Stair(P(0, 0), P(0, 10)), 3f);
         var b = Compute(Stair(P(0, 0), P(0, 10)), 2.6f);
         Assert.IsNotNull(a.hole); Assert.IsNotNull(b.hole);
-        int fa = a.pieces.FindIndex(p => p.clearance < StairLayout.Headroom);
-        int fb = b.pieces.FindIndex(p => p.clearance < StairLayout.Headroom);
+        int fa = a.pieces.FindIndex(p => NeedsHole(a, p));
+        int fb = b.pieces.FindIndex(p => NeedsHole(b, p));
         Assert.Less(fb, fa);
         float ra = Triangulator.SignedArea(a.hole) / (a.runLength * 1f);
         float rb = Triangulator.SignedArea(b.hole) / (b.runLength * 1f);
@@ -375,5 +382,52 @@ public class StairLayoutTests
         Assert.IsFalse(r.ok);
         Assert.AreEqual("RouteInvalid", r.error);
         Assert.IsTrue(Compute(Turn(150f, false, 3f)).ok);
+    }
+
+    [Test] public void Hole_EdgeLeavesCapsuleHeadroom([Values(2.7f, 3.0f, 3.3f)] float height)
+    {
+        // The slab edge sits on the front edge of the first piece in the hole, where the walking surface is at that
+        // piece's height: the free height there must be at least Headroom + CapsuleAllowance (2.25 m).
+        var r = Compute(Stair(P(0, 0), P(0, 10)), height);
+        Assert.IsTrue(r.ok, r.error);
+        Assert.IsNotNull(r.hole);
+        float ceiling = height - 0.2f;
+        int first = -1;
+        for (int k = 0; k < r.pieces.Count; k++)
+            if (PlanarFaces.PointInPolygon(Centroid(r.pieces[k].polygon), r.hole)) { first = k; break; }
+        Assert.GreaterOrEqual(first, 0);
+        for (int k = first; k < r.pieces.Count; k++)
+            Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(r.pieces[k].polygon), r.hole), "piece " + k + " in hole");
+        Assert.GreaterOrEqual(ceiling - r.pieces[first].height, StairLayout.Headroom + StairLayout.CapsuleAllowance - 1e-4f);
+        // ... and the hole starts no earlier than needed.
+        Assert.Less(ceiling - (r.pieces[first].height + r.riser), StairLayout.Headroom + StairLayout.CapsuleAllowance);
+        // Hole front edge = first riser edge of that piece.
+        Assert.AreEqual(r.pieces[first].frontA.y, MinY(r.hole), Eps);
+    }
+
+    [Test] public void SquareSpiral_OverlappingItsOwnRun_IsRouteInvalid()
+    {
+        // 2.6 m square spiral. On a 6 m floor (33 risers, 32 pieces) the fourth flight runs back over the first
+        // one's start; on a 3 m floor (16 pieces) the stair ends on the third flight.
+        var spiral = Stair(P(0, 0), P(0, 2.6f), P(2.6f, 2.6f), P(2.6f, 0), P(0, 0));
+        var tall = StairLayout.Compute(spiral, From(6f), To(6f));
+        Assert.IsFalse(tall.ok);
+        Assert.AreEqual("RouteInvalid", tall.error);
+        Assert.IsTrue(Compute(spiral).ok, Compute(spiral).error);
+    }
+
+    [Test] public void Hole_RampOff_AddsStepAllowance()
+    {
+        var on = Stair(P(0, 0), P(0, 10));
+        var off = Stair(P(0, 0), P(0, 10));
+        off.collisionRamp = false;
+        var a = Compute(on, 3.3f);
+        var c = Compute(off, 3.3f);
+        float ceiling = 3.3f - 0.2f;
+        int fa = a.pieces.FindIndex(p => PlanarFaces.PointInPolygon(Centroid(p.polygon), a.hole));
+        int fc = c.pieces.FindIndex(p => PlanarFaces.PointInPolygon(Centroid(p.polygon), c.hole));
+        Assert.Less(fc, fa);
+        Assert.GreaterOrEqual(ceiling - c.pieces[fc].height,
+            StairLayout.Headroom + StairLayout.CapsuleAllowance + StairLayout.StepAllowance - 1e-4f);
     }
 }

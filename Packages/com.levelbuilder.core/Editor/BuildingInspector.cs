@@ -246,7 +246,7 @@ namespace LevelBuilder.Editor
             if (!v0.Valid)
             {
                 EditorGUILayout.HelpBox(StairIssueText.Join(v0.issues), MessageType.Warning);
-                if (GUILayout.Button("Arreglar automáticamente"))
+                if (StairAutoFix.CanTry(v0) && GUILayout.Button("Arreglar automáticamente"))
                 {
                     if (StairAutoFix.TryFix(data, s, out var route))
                     {

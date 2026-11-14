@@ -49,7 +49,7 @@ public class StairDataTests
         Assert.AreEqual(0.20f, s.riserTarget, 1e-5f);
         Assert.AreEqual(0.32f, s.tread, 1e-5f);
         var d = new StairData();
-        Assert.AreEqual(1f, d.width); Assert.AreEqual(0.18f, d.riserTarget); Assert.AreEqual(0.28f, d.tread);
+        Assert.AreEqual(1.2f, d.width); Assert.AreEqual(0.18f, d.riserTarget); Assert.AreEqual(0.28f, d.tread);
     }
 
     [Test] public void RemoveTopFloor_RemovesStairsUsingIt()
