@@ -9,7 +9,8 @@ namespace LevelBuilder.Geometry
     /// (metres along the edge, world height). Face keys (one per surface, so each can get its own material):
     /// floor slab "region:{key}/floor" (top), "/floor/under", "/floor/edge"; ceiling "region:{key}/ceiling";
     /// roof slab (top floor) "region:{key}/roof" (top), "/roof/edge".
-    /// Region holes (pillars) and the optional extra holes are cut out of every horizontal face.
+    /// Region holes (pillars) are cut out of every horizontal face; the optional extra holes (stair wells)
+    /// cut the floor slab (top, underside and edges) and the ceiling, never the roof slab.
     /// </summary>
     public static class SlabMeshBuilder
     {
@@ -44,6 +45,9 @@ namespace LevelBuilder.Geometry
                 AddHorizontal(md, key + "/ceiling", verts, tris, isTopFloor ? top : top - f.slabThickness, Vector3.down);
                 if (isTopFloor)
                 {
+                    // The roof slab is never cut by the extra (stair) holes: only the region's own holes.
+                    if (holes != null && holes.Count > 0 &&
+                        !Prepare(r, null, out outer, out allHoles, out verts, out tris)) continue;
                     AddHorizontal(md, key + "/roof", verts, tris, top + f.slabThickness, Vector3.up);
                     AddSides(md, key + "/roof/edge", outer, allHoles, top, top + f.slabThickness);
                 }
