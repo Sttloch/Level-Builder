@@ -136,6 +136,9 @@ namespace LevelBuilder
         bool Matches(Collider other)
         {
             if (other == null) return false;
+            // Leaf colliders (kinematic bodies) sit inside door triggers: this door's own parts and any other
+            // door's leaf are never occupants.
+            if (other.transform.IsChildOf(transform) || other.GetComponentInParent<Door>() != null) return false;
             string tag = settings != null ? settings.playerTag : null;
             return string.IsNullOrEmpty(tag) || other.gameObject.tag == tag;
         }

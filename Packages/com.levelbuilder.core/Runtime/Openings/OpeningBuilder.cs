@@ -48,6 +48,8 @@ namespace LevelBuilder
         /// Scales <paramref name="instance"/> so the combined bounds of its renderers (in its parent's space) are
         /// size.x wide and size.y tall (z scale unchanged), then moves it so the bounds' bottom-centre sits at the
         /// parent's origin. Does nothing if it has no renderers or degenerate bounds.
+        /// The scale is written to the instance's own localScale, so its local rotation must be identity relative
+        /// to the parent: wrap a rotated prefab root in an identity pivot and fit the pivot.
         /// </summary>
         public static void FitToBox(GameObject instance, Vector3 size)
         {

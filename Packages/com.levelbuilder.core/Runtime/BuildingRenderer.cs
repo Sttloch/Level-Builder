@@ -18,7 +18,12 @@ namespace LevelBuilder
         static Material fallbackMaterial;
 
         public Material defaultMaterial;
-        /// <summary>Window glass. Null: a transparent clone of the default material, created once and cached.</summary>
+        /// <summary>
+        /// Window glass. Null: a transparent clone of the default material, created at runtime and cached.
+        /// For player builds (and for HDRP) assign a transparent material asset here: the runtime-generated glass
+        /// relies on transparent shader variants that may be stripped from builds when no material asset uses them,
+        /// in which case it renders opaque.
+        /// </summary>
         public Material glassMaterial;
 
         const string GlassPrefix = "LevelBuilder Glass ";
@@ -289,12 +294,8 @@ namespace LevelBuilder
             if (settings.leafPrefab != null)
             {
                 leaf = NewChild(go.transform, "Leaf");
-                var inst = Instantiate(settings.leafPrefab, leaf.transform, false);
-                inst.name = settings.leafPrefab.name;
-                inst.transform.localPosition = Vector3.zero;
-                SetGenFlags(inst);
-                OpeningBuilder.FitToBox(inst, size);
-                if (OpeningBuilder.TryLocalBounds(inst.transform, out var fitted) && fitted.size.z > 1e-4f) size.z = fitted.size.z;
+                var fit = InstantiateFitted(settings.leafPrefab, leaf.transform, size);
+                if (OpeningBuilder.TryLocalBounds(fit.transform, out var fitted) && fitted.size.z > 1e-4f) size.z = fitted.size.z;
             }
             else
                 leaf = AddMeshObject(go.transform, "Leaf", OpeningBuilder.DefaultLeaf(size.x, size.y, size.z), BaseMaterial, out _);
@@ -338,22 +339,32 @@ namespace LevelBuilder
             go.transform.localRotation = rot;
             if (o.windowPrefab != null)
             {
-                var inst = Instantiate(o.windowPrefab, go.transform, false);
-                inst.name = o.windowPrefab.name;
-                inst.transform.localPosition = Vector3.zero;
-                SetGenFlags(inst);
-                OpeningBuilder.FitToBox(inst, new Vector3(o.width, o.height, 0f));
-                inst.transform.localPosition += new Vector3(0f, o.sill, 0f);
+                var fit = InstantiateFitted(o.windowPrefab, go.transform, new Vector3(o.width, o.height, 0f));
+                fit.transform.localPosition += new Vector3(0f, o.sill, 0f);
                 return;
             }
             var frame = AddMeshObject(go.transform, "Frame", OpeningBuilder.WindowFrame(o.width, o.height, FrameBar), BaseMaterial, out _);
             frame.transform.localPosition = new Vector3(0f, o.sill, 0f);
             float gw = Mathf.Max(0f, o.width - 2f * FrameBar), gh = Mathf.Max(0f, o.height - 2f * FrameBar);
             var glass = AddMeshObject(go.transform, "Glass", OpeningBuilder.Glass(gw, gh), GlassFor(), out _);
+            glass.GetComponent<MeshRenderer>().shadowCastingMode = ShadowCastingMode.Off;
             glass.transform.localPosition = new Vector3(0f, o.sill + FrameBar, 0f);
             var box = glass.AddComponent<BoxCollider>(); // the window blocks passage like the wall it sits in
             box.size = new Vector3(gw, gh, 0.02f);
             box.center = new Vector3(0f, gh * 0.5f, 0f);
+        }
+
+        // The prefab root keeps its own rotation/scale (e.g. FBX roots at (-90,0,0)), so the fit is applied to an
+        // identity "Fit" pivot whose axes are the opening's. Returns the pivot.
+        static GameObject InstantiateFitted(GameObject prefab, Transform parent, Vector3 size)
+        {
+            var pivot = NewChild(parent, "Fit");
+            var inst = Instantiate(prefab, pivot.transform, false);
+            inst.name = prefab.name;
+            inst.transform.localPosition = Vector3.zero;
+            SetGenFlags(inst);
+            OpeningBuilder.FitToBox(pivot, size);
+            return pivot;
         }
 
         static void SetGenFlags(GameObject g)

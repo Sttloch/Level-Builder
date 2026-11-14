@@ -117,6 +117,45 @@ public class OpeningRendererTests
         Assert.AreEqual(2.1f, bounds.max.y, 1e-3f);
         Assert.AreEqual(1.2f, bounds.size.x, 1e-3f);
         Assert.AreEqual(0f, bounds.center.z, 1e-3f);
+        var glass = mrs.First(m => m.sharedMaterial.renderQueue >= 3000);
+        Assert.AreEqual(UnityEngine.Rendering.ShadowCastingMode.Off, glass.shadowCastingMode);
+    }
+
+    // Instantiate keeps the prefab root's rotation (e.g. FBX roots at (-90,0,0)): the fit must still be done
+    // on the opening's axes. The child box is deliberately non-uniform so a wrong axis shows up.
+    [TestCase(90f, 0f)]
+    [TestCase(0f, 90f)]
+    public void RotatedPrefabRoot_IsFittedOnOpeningAxes(float rotX, float rotY)
+    {
+        prefab = new GameObject("RotatedLeaf");
+        prefab.transform.localRotation = Quaternion.Euler(rotX, rotY, 0f);
+        var child = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        child.transform.SetParent(prefab.transform, false);
+        child.transform.localScale = new Vector3(0.5f, 3f, 0.1f);
+        var mf = child.GetComponent<MeshFilter>();
+        prefabMesh = Object.Instantiate(mf.sharedMesh);
+        prefabMesh.hideFlags = HideFlags.None;
+        mf.sharedMesh = prefabMesh;
+
+        var s = Square(out var f);
+        var o = AddDoor(f, s);
+        o.door.leafPrefab = prefab;
+        r.Regenerate();
+
+        var door = go.transform.Find("Floor 0/Doors/" + o.id).GetComponent<Door>();
+        var inst = go.GetComponentsInChildren<MeshFilter>(true).Single(m => m.sharedMesh == prefabMesh);
+        var bounds = inst.GetComponent<MeshRenderer>().bounds;
+        Assert.AreEqual(0.88f, bounds.size.x, 1e-3f);
+        Assert.AreEqual(2.09f, bounds.size.y, 1e-3f);
+        Assert.AreEqual(0f, bounds.min.y, 1e-3f);
+        Assert.AreEqual(2f, bounds.center.x, 1e-3f);
+        Assert.AreEqual(0f, bounds.center.z, 1e-3f);
+        Assert.AreEqual(0.88f, door.leafSize.x, 1e-3f);
+        Assert.AreEqual(2.09f, door.leafSize.y, 1e-3f);
+        var box = door.leaf.GetComponent<BoxCollider>();
+        Assert.AreEqual(0.88f, box.size.x, 1e-3f);
+        Assert.AreEqual(2.09f, box.size.y, 1e-3f);
+        Assert.AreEqual(bounds.size.z, box.size.z, 1e-3f);
     }
 
     [Test] public void CustomLeafPrefab_IsFittedAndItsAssetsSurviveRegenerate()

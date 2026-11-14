@@ -36,15 +36,22 @@ namespace LevelBuilder
                 SetFloat(m, "_ZWrite", 0f);
                 m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
                 m.SetOverrideTag("RenderType", "Transparent");
+                m.SetShaderPassEnabled("DepthOnly", false);
             }
             else if (shader == "HDRP/Lit")
             {
+                // Best effort (unverified here): standard alpha blend, no depth write, no depth/motion passes.
                 SetFloat(m, "_SurfaceType", 1f);
                 SetFloat(m, "_BlendMode", 0f);
+                SetFloat(m, "_SrcBlend", (float)BlendMode.SrcAlpha);
+                SetFloat(m, "_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
                 SetFloat(m, "_ZWrite", 0f);
+                SetFloat(m, "_ZTestDepthEqualForOpaque", (float)CompareFunction.LessEqual);
                 m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
                 m.EnableKeyword("_BLENDMODE_ALPHA");
                 m.SetOverrideTag("RenderType", "Transparent");
+                m.SetShaderPassEnabled("DepthOnly", false);
+                m.SetShaderPassEnabled("MotionVectors", false);
             }
             else
             {

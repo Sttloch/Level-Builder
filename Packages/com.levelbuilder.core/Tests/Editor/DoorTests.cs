@@ -238,5 +238,29 @@ namespace LevelBuilder.Tests
             d.Poll();
             Assert.IsFalse(d.IsOpen);
         }
+
+        // Leaf colliders (kinematic bodies) sit inside door triggers: neither the door's own leaf nor another
+        // door's leaf is an occupant, even when playerTag is empty ("any collider").
+        [Test] public void Door_IgnoresOwnAndOtherDoorLeaves()
+        {
+            var d = Prox("");
+            var ownLeaf = d.leaf.gameObject.AddComponent<BoxCollider>();
+            d.HandleEnter(ownLeaf);
+            d.HandleEnter(d.GetComponent<BoxCollider>()); // its own trigger
+            Assert.IsFalse(d.IsOpen);
+
+            var other = new GameObject("otherDoor");
+            _extras.Add(other);
+            var otherLeaf = new GameObject("Leaf");
+            otherLeaf.transform.SetParent(other.transform, false);
+            other.AddComponent<Door>().leaf = otherLeaf.transform;
+            d.HandleEnter(otherLeaf.AddComponent<BoxCollider>());
+            Assert.IsFalse(d.IsOpen);
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
+
+            d.HandleEnter(Occupant("Untagged"));
+            Assert.IsTrue(d.IsOpen);
+        }
     }
 }
