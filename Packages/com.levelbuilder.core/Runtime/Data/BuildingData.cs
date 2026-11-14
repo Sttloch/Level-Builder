@@ -69,14 +69,17 @@ namespace LevelBuilder
             {
                 if (!exterior.Contains(s.id)) continue;
                 if (below.GetNode(s.startNodeId) == null || below.GetNode(s.endNodeId) == null) continue;
-                f.segments.Add(new WallSegment
+                var copy = new WallSegment
                 {
                     id = IdUtil.New(),
                     startNodeId = Clone(s.startNodeId).id,
                     endNodeId = Clone(s.endNodeId).id,
                     thickness = s.thickness,
                     heightOverride = s.heightOverride
-                });
+                };
+                foreach (var o in s.openings)
+                    if (o.type == OpeningType.Window) copy.openings.Add(o.Clone());
+                f.segments.Add(copy);
             }
         }
 
@@ -184,6 +187,14 @@ namespace LevelBuilder
                 heightOverride = s.heightOverride
             };
             s.endNodeId = node.id;
+            float splitLen = (node.position - a.position).magnitude;
+            var kept = new List<WallOpening>();
+            foreach (var o in s.openings)
+            {
+                if (o.center >= splitLen) { o.center -= splitLen; second.openings.Add(o); }
+                else kept.Add(o);
+            }
+            s.openings = kept;
             f.segments.Add(second);
             SegmentSplit?.Invoke(f, s.id, second.id);
             return second;
@@ -199,6 +210,9 @@ namespace LevelBuilder
             if (s == null || t == null || s.endNodeId != t.startNodeId) return false;
             string mid = s.endNodeId;
             if (f.segments.Exists(x => x != s && x != t && (x.startNodeId == mid || x.endNodeId == mid))) return false;
+            float len = Length(f, s);
+            foreach (var o in t.openings) { o.center += len; s.openings.Add(o); }
+            t.openings.Clear();
             s.endNodeId = t.endNodeId;
             f.segments.Remove(t);
             DeleteNode(f, mid);
@@ -378,17 +392,69 @@ namespace LevelBuilder
         }
 
         // Drops zero-length segments and duplicates (same node pair, either direction), keeping the first.
-        static void RemoveDegenerateSegments(FloorData f)
+        // A removed duplicate's openings move to the survivor (center mirrored if the direction is opposite).
+        void RemoveDegenerateSegments(FloorData f)
         {
-            var seen = new HashSet<string>();
+            var seen = new Dictionary<string, WallSegment>();
             f.segments.RemoveAll(s =>
             {
                 if (s.startNodeId == s.endNodeId) return true;
                 string key = string.CompareOrdinal(s.startNodeId, s.endNodeId) < 0
                     ? s.startNodeId + "|" + s.endNodeId
                     : s.endNodeId + "|" + s.startNodeId;
-                return !seen.Add(key);
+                if (!seen.TryGetValue(key, out var keeper)) { seen[key] = s; return false; }
+                bool opposite = keeper.startNodeId != s.startNodeId;
+                float len = Length(f, keeper);
+                foreach (var o in s.openings)
+                {
+                    if (opposite) o.center = len - o.center;
+                    keeper.openings.Add(o);
+                }
+                s.openings.Clear();
+                return true;
             });
+        }
+
+        /// <summary>Distance between the segment's node positions (0 if a node is missing).</summary>
+        public static float Length(FloorData f, WallSegment s)
+        {
+            var a = f.GetNode(s.startNodeId);
+            var b = f.GetNode(s.endNodeId);
+            return a == null || b == null ? 0f : (b.position - a.position).magnitude;
+        }
+
+        public WallOpening AddOpening(FloorData f, string segmentId, WallOpening o)
+        {
+            var s = f.GetSegment(segmentId);
+            if (s == null || o == null) return o;
+            if (string.IsNullOrEmpty(o.id)) o.id = IdUtil.New();
+            s.openings.Add(o);
+            return o;
+        }
+
+        public bool RemoveOpening(FloorData f, string openingId)
+        {
+            var (seg, o) = FindOpening(f, openingId);
+            return o != null && seg.openings.Remove(o);
+        }
+
+        public (WallSegment seg, WallOpening o) FindOpening(FloorData f, string openingId)
+        {
+            foreach (var s in f.segments)
+                foreach (var o in s.openings)
+                    if (o.id == openingId) return (s, o);
+            return (null, null);
+        }
+
+        public bool MoveOpening(FloorData f, string openingId, string toSegmentId, float center)
+        {
+            var (seg, o) = FindOpening(f, openingId);
+            var to = f.GetSegment(toSegmentId);
+            if (o == null || to == null) return false;
+            seg.openings.Remove(o);
+            o.center = center;
+            to.openings.Add(o);
+            return true;
         }
 
         public void RemoveSegment(FloorData f, string segmentId)
