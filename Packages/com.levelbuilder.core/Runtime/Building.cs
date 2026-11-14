@@ -5,7 +5,7 @@ using UnityEngine;
 namespace LevelBuilder
 {
     /// <summary>Holds the serialized building data. Generated meshes are rebuilt from it and never saved.</summary>
-    [ExecuteAlways]
+    [ExecuteAlways, SelectionBase, DisallowMultipleComponent]
     public class Building : MonoBehaviour
     {
         public BuildingData data = new BuildingData();

@@ -1,6 +1,10 @@
+using System.Collections;
 using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 using LevelBuilder;
 
 public class BuildingRendererTests
@@ -81,10 +85,13 @@ public class BuildingRendererTests
         Assert.AreEqual(1, count);
     }
 
-    [Test] public void Instantiate_DoesNotDestroyOriginalMeshes()
+    // The clone's OnEnable sees the copied (inherited) floors: it never destroys their meshes (owned by the
+    // original) and replaces them with its own on the deferred editor regenerate.
+    [UnityTest] public IEnumerator Instantiate_DoesNotDestroyOriginalMeshes()
     {
         Square();
         r.Regenerate();
+        yield return null; // flush anything pending on the original (e.g. Reset re-skin) before cloning
         var clone = Object.Instantiate(go);
         try
         {
@@ -93,6 +100,11 @@ public class BuildingRendererTests
             Assert.Greater(walls.sharedMesh.vertexCount, 0);
             Assert.IsTrue(walls.GetComponent<MeshCollider>().sharedMesh != null);
 
+            yield return null; // deferred regenerate of the clone
+            yield return null;
+
+            Assert.IsTrue(walls.sharedMesh != null);
+            Assert.Greater(walls.sharedMesh.vertexCount, 0);
             int count = 0;
             foreach (Transform t in clone.transform)
                 if (t.name == "Floor 0") { count++; Assert.AreEqual(HideFlags.DontSave, t.gameObject.hideFlags & HideFlags.DontSave); }
@@ -145,5 +157,87 @@ public class BuildingRendererTests
         b.data.RemoveNode(f0, f0.nodes[0].id);
         Assert.DoesNotThrow(() => r.Regenerate());
         Assert.DoesNotThrow(() => r.Regenerate(0));
+    }
+
+    int FloorZeroCount()
+    {
+        int count = 0;
+        foreach (Transform t in go.transform) if (t.name == "Floor 0") count++;
+        return count;
+    }
+
+    // SetActive(false -> true) re-runs OnEnable while the hierarchy is being activated: destroying the
+    // existing generated children there is an error ("Cannot destroy GameObject while it is being
+    // activated or deactivated") and used to duplicate floors. OnEnable must leave them alone and defer.
+    [UnityTest] public IEnumerator ToggleActive_NoErrorNoDuplicates()
+    {
+        Square();
+        r.Regenerate();
+        var before = go.transform.Find("Floor 0").gameObject;
+        go.SetActive(false);
+        go.SetActive(true);
+        Assert.IsTrue(before != null, "OnEnable destroyed generated children during activation");
+        Assert.AreEqual(1, FloorZeroCount());
+        yield return null; // let the deferred editor regenerate run
+        yield return null;
+        Assert.AreEqual(1, FloorZeroCount());
+        var walls = go.transform.Find("Floor 0/Walls").GetComponent<MeshFilter>().sharedMesh;
+        Assert.IsTrue(walls != null && walls.vertexCount > 0);
+        LogAssert.NoUnexpectedReceived();
+    }
+
+    [Test] public void ToggleParentActive_ThenRegenerate_SingleFloor()
+    {
+        Square();
+        r.Regenerate();
+        var parent = new GameObject("Parent");
+        try
+        {
+            go.transform.SetParent(parent.transform, false);
+            var before = go.transform.Find("Floor 0").gameObject;
+            parent.SetActive(false);
+            parent.SetActive(true);
+            Assert.IsTrue(before != null, "OnEnable destroyed generated children during activation");
+            r.Regenerate();
+            Assert.AreEqual(1, FloorZeroCount());
+            LogAssert.NoUnexpectedReceived();
+        }
+        finally
+        {
+            go.transform.SetParent(null, false);
+            Object.DestroyImmediate(parent);
+        }
+    }
+
+    [Test] public void Building_IsSelectionBaseAndSingle()
+    {
+        Assert.IsTrue(System.Attribute.IsDefined(typeof(Building), typeof(SelectionBaseAttribute)));
+        Assert.IsTrue(System.Attribute.IsDefined(typeof(Building), typeof(DisallowMultipleComponent)));
+    }
+
+    [Test] public void GeneratedFloors_HiddenInHierarchy()
+    {
+        Square();
+        r.Regenerate();
+        var floor = go.transform.Find("Floor 0");
+        Assert.AreEqual(HideFlags.HideInHierarchy, floor.gameObject.hideFlags & HideFlags.HideInHierarchy);
+    }
+
+    [Test] public void GeneratedMeshes_HaveTangents()
+    {
+        Square();
+        r.Regenerate();
+        var mesh = go.transform.Find("Floor 0/Floor").GetComponent<MeshFilter>().sharedMesh;
+        Assert.Greater(mesh.vertexCount, 0);
+        Assert.AreEqual(mesh.vertexCount, mesh.tangents.Length);
+    }
+
+    [Test] public void Reset_AssignsPersistentDefaultMaterial()
+    {
+        r.defaultMaterial = null;
+        typeof(BuildingRenderer).GetMethod("Reset", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            .Invoke(r, null);
+        Assert.IsNotNull(r.defaultMaterial);
+        Assert.IsTrue(EditorUtility.IsPersistent(r.defaultMaterial));
     }
 }

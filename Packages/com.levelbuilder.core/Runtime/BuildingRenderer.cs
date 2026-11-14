@@ -12,7 +12,8 @@ namespace LevelBuilder
     [ExecuteAlways, RequireComponent(typeof(Building))]
     public class BuildingRenderer : MonoBehaviour
     {
-        const HideFlags GenFlags = HideFlags.DontSave | HideFlags.NotEditable;
+        // Hidden in the hierarchy: generated objects are not user content (scene clicks select the Building).
+        const HideFlags GenFlags = HideFlags.DontSave | HideFlags.NotEditable | HideFlags.HideInHierarchy;
         const string FallbackName = "LevelBuilder Default";
         static Material fallbackMaterial;
 
@@ -25,6 +26,26 @@ namespace LevelBuilder
 
         Building B => building != null ? building : (building = GetComponent<Building>());
 
+#if UNITY_EDITOR
+        /// <summary>
+        /// Editor only: a persistent material asset to serialize into defaultMaterial at creation, so player builds
+        /// never depend on RenderPipelineAsset.defaultMaterial (editor-only) or Shader.Find (may be stripped).
+        /// </summary>
+        public static Material EditorDefaultMaterial()
+        {
+            var rp = GraphicsSettings.currentRenderPipeline;
+            if (rp != null && rp.defaultMaterial != null) return rp.defaultMaterial;
+            return AssetDatabase.GetBuiltinExtraResource<Material>("Default-Material.mat");
+        }
+
+        void Reset()
+        {
+            defaultMaterial = EditorDefaultMaterial();
+            if (isActiveAndEnabled) B.MarkDirty(); // re-skin already generated parts (deferred)
+        }
+#endif
+
+        // Last resort when no material was serialized (e.g. component added from code in a player).
         static Material DefaultMaterial()
         {
             var rp = GraphicsSettings.currentRenderPipeline;
@@ -39,12 +60,12 @@ namespace LevelBuilder
             return fallbackMaterial;
         }
 
-        // Only DontSave children named "Floor {n}" are ours; user children are never touched.
-        static bool IsGeneratedFloor(Transform t, out int index)
+        /// <summary>Only DontSave children named "Floor {n}" are generated floors; user children are never touched.</summary>
+        public static bool IsGeneratedFloor(Transform t, out int index)
         {
             index = -1;
             return (t.gameObject.hideFlags & HideFlags.DontSave) == HideFlags.DontSave
-                && t.name.StartsWith("Floor ")
+                && t.name.StartsWith("Floor ", System.StringComparison.Ordinal)
                 && int.TryParse(t.name.Substring(6), out index);
         }
 
@@ -52,7 +73,20 @@ namespace LevelBuilder
         {
             B.Changed += OnChanged;
             B.ConsumeDirty(tmp); // pending state is covered by the full regenerate below
+#if UNITY_EDITOR
+            // OnEnable can run while the hierarchy is being activated (SetActive, Undo re-activation, domain
+            // reload): destroying the existing generated children then is an error. Keep them and regenerate
+            // on the next editor update instead.
+            if (HasGeneratedChildren()) { B.MarkDirty(); return; }
+#endif
             Regenerate();
+        }
+
+        bool HasGeneratedChildren()
+        {
+            for (int c = 0; c < transform.childCount; c++)
+                if (IsGeneratedFloor(transform.GetChild(c), out _)) return true;
+            return false;
         }
 
         void OnDisable()

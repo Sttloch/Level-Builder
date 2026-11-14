@@ -81,6 +81,7 @@ namespace LevelBuilder.Geometry
             foreach (var g in groups) all.AddRange(g.triangles);
             mesh.subMeshCount = 1;
             mesh.SetTriangles(all, 0, true);
+            if (all.Count > 0) mesh.RecalculateTangents(); // after normals/uvs; normal-mapped materials need them
             return mesh;
         }
     }

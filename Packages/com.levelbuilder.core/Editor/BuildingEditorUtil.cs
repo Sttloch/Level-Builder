@@ -172,8 +172,7 @@ namespace LevelBuilder.Editor
             for (int c = 0; c < t.childCount; c++)
             {
                 var child = t.GetChild(c);
-                if ((child.gameObject.hideFlags & HideFlags.DontSave) != HideFlags.DontSave) continue;
-                if (!child.name.StartsWith("Floor ") || !int.TryParse(child.name.Substring(6), out int i)) continue;
+                if (!BuildingRenderer.IsGeneratedFloor(child, out int i)) continue;
                 bool on = visible(i);
                 foreach (var mr in child.GetComponentsInChildren<MeshRenderer>(true))
                     if (mr.enabled != on) mr.enabled = on;

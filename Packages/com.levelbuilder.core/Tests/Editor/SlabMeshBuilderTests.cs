@@ -104,4 +104,27 @@ public class SlabMeshBuilderTests
         Assert.AreEqual(15f, FaceArea(md, "region:" + big.key + "/floor", Vector3.up, 0f), 1e-3f);
         AssertWinding(md);
     }
+
+    static HashSet<string> Keys(MeshData md)
+    {
+        var set = new HashSet<string>();
+        foreach (var g in md.groups) set.Add(g.key);
+        return set;
+    }
+
+    [Test] public void FaceKeys_SeparateSurfaces()
+    {
+        var b = new BuildingData(); var f = b.AddFloor(); b.AddFloor();
+        AddSquare(b, f, 0, 0, 4);
+        string k = "region:" + PlanarFaces.Compute(f).regions[0].key;
+        var floor = SlabMeshBuilder.BuildFloor(f);
+        CollectionAssert.AreEquivalent(new[] { k + "/floor", k + "/floor/under", k + "/floor/edge" }, Keys(floor));
+        Assert.AreEqual(16f, FaceArea(floor, k + "/floor", Vector3.up, 0f), 1e-3f);
+        Assert.AreEqual(16f, FaceArea(floor, k + "/floor/under", Vector3.down, -0.2f), 1e-3f);
+        CollectionAssert.AreEquivalent(new[] { k + "/ceiling" }, Keys(SlabMeshBuilder.BuildCeiling(f, false)));
+        var roof = SlabMeshBuilder.BuildCeiling(f, true);
+        CollectionAssert.AreEquivalent(new[] { k + "/ceiling", k + "/roof", k + "/roof/edge" }, Keys(roof));
+        Assert.AreEqual(16f, FaceArea(roof, k + "/ceiling", Vector3.down, 3f), 1e-3f);
+        Assert.AreEqual(16f, FaceArea(roof, k + "/roof", Vector3.up, 3.2f), 1e-3f);
+    }
 }

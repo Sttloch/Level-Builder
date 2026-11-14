@@ -22,7 +22,12 @@ namespace LevelBuilder.Editor
             var b = go.AddComponent<Building>();
             b.data.AddFloor();
             b.activeFloor = 0;
-            go.AddComponent<BuildingRenderer>(); // OnEnable regenerates from the data above
+            var r = go.AddComponent<BuildingRenderer>(); // OnEnable regenerates from the data above
+            if (r.defaultMaterial == null)
+            {
+                r.defaultMaterial = BuildingRenderer.EditorDefaultMaterial(); // persistent asset: survives builds
+                r.Regenerate();
+            }
             return go;
         }
     }

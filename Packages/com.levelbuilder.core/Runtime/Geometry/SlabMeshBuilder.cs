@@ -6,7 +6,9 @@ namespace LevelBuilder.Geometry
     /// <summary>
     /// Floor and ceiling slabs, one per closed region (polygon = wall axes; the walls cover the rim).
     /// Plan (x, y) maps to world (x, height, y); horizontal UVs are world xz, side UVs are
-    /// (metres along the edge, world height). Face keys: "region:{key}/floor", "region:{key}/ceiling".
+    /// (metres along the edge, world height). Face keys (one per surface, so each can get its own material):
+    /// floor slab "region:{key}/floor" (top), "/floor/under", "/floor/edge"; ceiling "region:{key}/ceiling";
+    /// roof slab (top floor) "region:{key}/roof" (top), "/roof/edge".
     /// Region holes (pillars) and the optional extra holes are cut out of every horizontal face.
     /// </summary>
     public static class SlabMeshBuilder
@@ -20,8 +22,8 @@ namespace LevelBuilder.Geometry
                 if (!Prepare(r, holes, out var outer, out var allHoles, out var verts, out var tris)) continue;
                 string key = "region:" + r.key + "/floor";
                 AddHorizontal(md, key, verts, tris, f.elevation, Vector3.up);
-                AddHorizontal(md, key, verts, tris, f.elevation - f.slabThickness, Vector3.down);
-                AddSides(md, key, outer, allHoles, f.elevation - f.slabThickness, f.elevation);
+                AddHorizontal(md, key + "/under", verts, tris, f.elevation - f.slabThickness, Vector3.down);
+                AddSides(md, key + "/edge", outer, allHoles, f.elevation - f.slabThickness, f.elevation);
             }
             return md;
         }
@@ -38,12 +40,12 @@ namespace LevelBuilder.Geometry
             foreach (var r in PlanarFaces.Compute(f).regions)
             {
                 if (!Prepare(r, holes, out var outer, out var allHoles, out var verts, out var tris)) continue;
-                string key = "region:" + r.key + "/ceiling";
-                AddHorizontal(md, key, verts, tris, isTopFloor ? top : top - f.slabThickness, Vector3.down);
+                string key = "region:" + r.key;
+                AddHorizontal(md, key + "/ceiling", verts, tris, isTopFloor ? top : top - f.slabThickness, Vector3.down);
                 if (isTopFloor)
                 {
-                    AddHorizontal(md, key, verts, tris, top + f.slabThickness, Vector3.up);
-                    AddSides(md, key, outer, allHoles, top, top + f.slabThickness);
+                    AddHorizontal(md, key + "/roof", verts, tris, top + f.slabThickness, Vector3.up);
+                    AddSides(md, key + "/roof/edge", outer, allHoles, top, top + f.slabThickness);
                 }
             }
             return md;
