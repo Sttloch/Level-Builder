@@ -8,8 +8,8 @@ namespace LevelBuilder.Editor
     /// Scene view tool to draw and edit the walls of the active floor.
     /// Click: add point (double click / Esc / Enter finishes, click on the first point closes).
     /// Ctrl: no grid snap. Shift while drawing: 15 degree angles. Shift+click (not drawing): select segment.
-    /// Alt+click on a segment: split it. Not drawing: drag node handles to move them (linked columns move together);
-    /// Delete removes the selected node / segment.
+    /// Not drawing: double click on a segment splits it; drag a node to move it (linked columns move together);
+    /// click a node (no drag) to select it and start a wall from it; Delete removes the selected node / segment.
     /// </summary>
     [EditorTool("Paredes", typeof(Building))]
     public class WallTool : EditorTool
@@ -17,8 +17,11 @@ namespace LevelBuilder.Editor
         public const float Grid = 0.5f;
         public const float AngleStep = 15f;
         const float PickPixels = 10f;
+        const float DragPixels = 4f;
+        const double DeleteSwallowSeconds = 0.5;
 
         static readonly int ToolHint = "LevelBuilder.WallTool".GetHashCode();
+        static readonly int NodeHint = "LevelBuilder.WallTool.Node".GetHashCode();
         static readonly Color WallColor = new Color(1f, 1f, 1f, 0.9f);
         static readonly Color SelectedColor = new Color(1f, 0.85f, 0.1f, 1f);
         static readonly Color LinkedColor = new Color(0.3f, 0.8f, 1f, 1f);
@@ -27,8 +30,17 @@ namespace LevelBuilder.Editor
         WallDrawSession session;
         Building sessionBuilding;
 
+        // Node handle press state: click without drag starts a wall, drag moves the node in one Undo step.
+        string pressedNodeId;
+        Vector2 pressMouse;
+        bool pressDragged;
+        int pressUndoGroup = -1;
+
+        double lastKeyDeleteTime = -1;
+
         public override GUIContent toolbarIcon =>
-            new GUIContent(EditorGUIUtility.IconContent("EditCollider").image, "Paredes (Level Builder)");
+            new GUIContent(EditorGUIUtility.IconContent("EditCollider").image,
+                "Paredes (Level Builder): clic dibuja, doble clic en pared la divide, arrastra nodos para moverlos");
 
         public override void OnActivated()
         {
@@ -39,11 +51,14 @@ namespace LevelBuilder.Editor
         {
             Undo.undoRedoPerformed -= OnUndoRedo;
             session = null;
+            pressedNodeId = null;
         }
 
         void OnUndoRedo()
         {
-            session?.Finish();
+            // Undo/Redo may deserialize new data instances: drop the session; it is rebuilt from the building.
+            session = null;
+            pressedNodeId = null;
             SceneView.RepaintAll();
         }
 
@@ -61,6 +76,7 @@ namespace LevelBuilder.Editor
                 session = new WallDrawSession(data, fi);
                 sessionBuilding = b;
             }
+            session.Rebind(data); // never hold a data object across events
 
             var e = Event.current;
             int id = GUIUtility.GetControlID(ToolHint, FocusType.Passive);
@@ -73,22 +89,52 @@ namespace LevelBuilder.Editor
 
             HandleKeys(b, data, f, fi, e);
 
-            if (e.type == EventType.MouseDown && e.button == 0 && hasCursor && HandleUtility.nearestControl == id)
+            switch (e.type)
             {
-                if (e.alt) TrySplit(b, data, f, fi, e.mousePosition, cursor);
-                else if (e.clickCount >= 2 && session.IsDrawing) session.Finish();
-                else if (e.shift && !session.IsDrawing && PickSegment(b, f, e.mousePosition, out var seg))
-                    WallSelection.SelectSegment(b, f, seg.id);
-                else
-                {
-                    WallSelection.Clear();
-                    BuildingEditorUtil.Mutate(b, "Dibujar pared", fi, () => session.Click(cursor));
-                }
-                e.Use();
+                case EventType.MouseDown:
+                    if (e.button == 0 && hasCursor && HandleUtility.nearestControl == id && !e.alt)
+                    {
+                        GUIUtility.hotControl = id;
+                        OnClick(b, data, f, fi, e, cursor);
+                        e.Use();
+                    }
+                    break;
+                case EventType.MouseUp:
+                    if (GUIUtility.hotControl == id && e.button == 0)
+                    {
+                        GUIUtility.hotControl = 0;
+                        e.Use();
+                    }
+                    break;
             }
 
             if (hasCursor && e.type == EventType.Repaint) DrawPreview(b, f, cursor);
             if (e.type == EventType.MouseMove || e.type == EventType.MouseDrag) view.Repaint();
+        }
+
+        void OnClick(Building b, BuildingData data, FloorData f, int fi, Event e, Vector2 cursor)
+        {
+            if (e.clickCount >= 2)
+            {
+                // Double click on a segment with no chain in progress (the first click only started one): split.
+                if (session.PointCount <= 1 && PickSegment(b, f, e.mousePosition, out var seg))
+                {
+                    session.Finish();
+                    TrySplit(b, data, f, fi, seg, e);
+                }
+                else session.Finish();
+                return;
+            }
+            if (e.shift && !session.IsDrawing && PickSegment(b, f, e.mousePosition, out var picked))
+            {
+                WallSelection.SelectSegment(b, f, picked.id);
+                return;
+            }
+            WallSelection.Clear();
+            if (session.WouldAddSegment(cursor))
+                BuildingEditorUtil.Mutate(b, "Dibujar pared", fi, () => session.Click(cursor));
+            else
+                session.Click(cursor); // first point / repeated point: no data change, no Undo entry
         }
 
         bool TryCursor(Building b, FloorData f, Event e, out Vector2 p)
@@ -97,7 +143,7 @@ namespace LevelBuilder.Editor
             // Existing nodes win over the grid (also with Ctrl) so chains can start/close on off-grid nodes.
             if (NearNode(b, f, e.mousePosition, out var node)) p = node.position;
             else if (!(e.control || e.command)) p = GridSnap.Snap(p, Grid);
-            if (e.shift && session.IsDrawing && !e.alt)
+            if (e.shift && session.IsDrawing)
                 p = GridSnap.SnapAngle(session.LastPoint.Value, p, AngleStep);
             return true;
         }
@@ -132,11 +178,19 @@ namespace LevelBuilder.Editor
             return best != null;
         }
 
-        void TrySplit(Building b, BuildingData data, FloorData f, int fi, Vector2 mouse, Vector2 cursor)
+        static void TrySplit(Building b, BuildingData data, FloorData f, int fi, WallSegment seg, Event e)
         {
-            if (!PickSegment(b, f, mouse, out var seg)) return;
+            // Raw plane point (grid snapped unless Ctrl), not the node-snapped cursor; refuse near endpoints.
+            if (!BuildingEditorUtil.GuiToPlan(b, e.mousePosition, f.elevation, out var p)) return;
+            if (!(e.control || e.command)) p = GridSnap.Snap(p, Grid);
+            var a = f.GetNode(seg.startNodeId).position;
+            var c = f.GetNode(seg.endNodeId).position;
+            Geometry.Seg2D.DistanceToSegment(p, a, c, out float t);
+            var at = Vector2.Lerp(a, c, t);
+            if ((at - a).magnitude <= BuildingData.MergeTolerance || (at - c).magnitude <= BuildingData.MergeTolerance)
+                return;
             WallNode created = null;
-            BuildingEditorUtil.Mutate(b, "Dividir pared", fi, () => created = data.SplitSegment(f, seg.id, cursor));
+            BuildingEditorUtil.Mutate(b, "Dividir pared", fi, () => created = data.SplitSegment(f, seg.id, at));
             if (created != null) WallSelection.SelectNode(b, f, created.id);
         }
 
@@ -149,32 +203,41 @@ namespace LevelBuilder.Editor
                     session.Finish();
                     e.Use();
                 }
-                else if (e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace)
+                else if ((e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace) && DeleteSelection(b, data, f, fi))
                 {
-                    if (DeleteSelection(b, data, f, fi)) e.Use();
+                    lastKeyDeleteTime = EditorApplication.timeSinceStartup;
+                    e.Use();
                 }
             }
-            // Delete also arrives as a command; swallow it while this tool is active so it never deletes the
-            // Building GameObject from the Scene view (a KeyDown may already have removed the selection).
+            // Delete also arrives as a command. Only take it when there is a wall selection to delete (or the
+            // KeyDown just deleted one), so otherwise the Building GameObject can still be deleted normally.
             else if ((e.type == EventType.ValidateCommand || e.type == EventType.ExecuteCommand)
                      && (e.commandName == "SoftDelete" || e.commandName == "Delete"))
             {
-                if (e.type == EventType.ExecuteCommand) DeleteSelection(b, data, f, fi);
-                e.Use();
+                bool justDeleted = EditorApplication.timeSinceStartup - lastKeyDeleteTime < DeleteSwallowSeconds;
+                if (HasSelection(b, f))
+                {
+                    if (e.type == EventType.ExecuteCommand) DeleteSelection(b, data, f, fi);
+                    e.Use();
+                }
+                else if (justDeleted) e.Use();
             }
         }
 
-        static bool DeleteSelection(Building b, BuildingData data, FloorData f, int fi)
+        static bool HasSelection(Building b, FloorData f) =>
+            WallSelection.Floor(b) == f && (WallSelection.Node(b) != null || WallSelection.Segment(b) != null);
+
+        bool DeleteSelection(Building b, BuildingData data, FloorData f, int fi)
         {
-            if (WallSelection.Floor(b) != f) return false;
+            if (!HasSelection(b, f)) return false;
             var node = WallSelection.Node(b);
             var seg = WallSelection.Segment(b);
             if (node != null)
                 BuildingEditorUtil.Mutate(b, "Eliminar nodo", fi, () => data.RemoveNode(f, node.id));
-            else if (seg != null)
+            else
                 BuildingEditorUtil.Mutate(b, "Eliminar pared", fi, () => data.RemoveSegment(f, seg.id));
-            else return false;
             WallSelection.Clear();
+            session.Finish();
             return true;
         }
 
@@ -194,7 +257,7 @@ namespace LevelBuilder.Editor
             }
         }
 
-        static void DoNodeHandles(Building b, BuildingData data, FloorData f, int fi, Event e)
+        void DoNodeHandles(Building b, BuildingData data, FloorData f, int fi, Event e)
         {
             var linked = BuildingEditorUtil.LinkedNodeIds(data, f);
             var selectedNode = WallSelection.Node(b);
@@ -207,17 +270,44 @@ namespace LevelBuilder.Editor
                 Handles.color = n == selectedNode ? SelectedColor : isLinked ? LinkedColor : WallColor;
                 Handles.CapFunction cap = isLinked ? Handles.CubeHandleCap : Handles.SphereHandleCap;
 
-                int handleId = GUIUtility.GetControlID(FocusType.Passive);
-                bool down = e.type == EventType.MouseDown && e.button == 0 && !e.alt && HandleUtility.nearestControl == handleId;
+                int handleId = GUIUtility.GetControlID(NodeHint, FocusType.Passive);
+                var type = e.type;
+                bool down = type == EventType.MouseDown && e.button == 0 && HandleUtility.nearestControl == handleId;
+                bool up = type == EventType.MouseUp && e.button == 0 && GUIUtility.hotControl == handleId;
+                Vector2 mouse = e.mousePosition;
+
                 EditorGUI.BeginChangeCheck();
                 Handles.FreeMoveHandle(handleId, world, size, Vector3.zero, cap);
-                if (down && GUIUtility.hotControl == handleId) WallSelection.SelectNode(b, f, n.id);
-                if (EditorGUI.EndChangeCheck()
-                    && BuildingEditorUtil.GuiToPlan(b, e.mousePosition, f.elevation, out var p))
+                bool changed = EditorGUI.EndChangeCheck();
+
+                if (down && GUIUtility.hotControl == handleId)
                 {
-                    if (!(e.control || e.command)) p = GridSnap.Snap(p, Grid);
-                    if ((p - n.position).sqrMagnitude > 1e-8f)
-                        BuildingEditorUtil.Mutate(b, "Mover nodo", isLinked ? -1 : fi, () => data.MoveNode(f, n.id, p));
+                    WallSelection.SelectNode(b, f, n.id);
+                    pressedNodeId = n.id;
+                    pressMouse = mouse;
+                    pressDragged = false;
+                    Undo.IncrementCurrentGroup();
+                    Undo.SetCurrentGroupName("Mover nodo");
+                    pressUndoGroup = Undo.GetCurrentGroup();
+                }
+
+                if (changed && pressedNodeId == n.id)
+                {
+                    if ((mouse - pressMouse).magnitude > DragPixels) pressDragged = true;
+                    if (pressDragged && BuildingEditorUtil.GuiToPlan(b, mouse, f.elevation, out var p))
+                    {
+                        if (!(e.control || e.command)) p = GridSnap.Snap(p, Grid);
+                        if ((p - n.position).sqrMagnitude > 1e-8f)
+                            BuildingEditorUtil.Mutate(b, "Mover nodo", isLinked ? -1 : fi, () => data.MoveNode(f, n.id, p));
+                    }
+                }
+
+                if (up && pressedNodeId == n.id)
+                {
+                    if (pressDragged) Undo.CollapseUndoOperations(pressUndoGroup); // whole drag = one Undo step
+                    else session.Click(n.position); // click without drag: start a wall at this node
+                    pressedNodeId = null;
+                    pressUndoGroup = -1;
                 }
             }
         }

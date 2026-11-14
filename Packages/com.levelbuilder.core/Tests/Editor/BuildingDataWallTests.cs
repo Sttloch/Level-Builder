@@ -118,5 +118,16 @@ namespace LevelBuilder.Tests
             Assert.AreEqual(3f, f2.elevation, 1e-5f);
             Assert.AreEqual(2, b.floors.Count);
         }
+            [Test]
+        public void SplitSegment_AtEndpoint_ReturnsExistingNodeNoNewSegment()
+        {
+            var seg = b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0))[0];
+            var end = f.GetNode(seg.endNodeId);
+            var start = f.GetNode(seg.startNodeId);
+            Assert.AreSame(end, b.SplitSegment(f, seg.id, new Vector2(4.005f, 0.3f)));
+            Assert.AreSame(start, b.SplitSegment(f, seg.id, new Vector2(-1f, 0f)));
+            Assert.AreEqual(2, f.nodes.Count);
+            Assert.AreEqual(1, f.segments.Count);
+        }
     }
 }

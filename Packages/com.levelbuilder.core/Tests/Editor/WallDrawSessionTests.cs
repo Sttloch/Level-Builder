@@ -84,4 +84,27 @@ public class WallDrawSessionTests
         Assert.AreEqual(0, f.segments.Count);
         Assert.AreEqual(1, f1.segments.Count);
     }
+    [Test] public void Session_Rebind_WritesToNewDataObject()
+    {
+        var s = new WallDrawSession(data, 0);
+        s.Click(new Vector2(0, 0));
+        // Undo/Redo may deserialize a new BuildingData instance: the session must write to the current one.
+        var replaced = new BuildingData();
+        var rf = replaced.AddFloor();
+        s.Rebind(replaced);
+        Assert.AreSame(replaced, s.Data);
+        s.Click(new Vector2(2, 0));
+        Assert.AreEqual(1, rf.segments.Count);
+        Assert.AreEqual(0, f.segments.Count);
+    }
+
+    [Test] public void Session_WouldAddSegment_OnlyAfterFirstPointAndNotRepeated()
+    {
+        var s = new WallDrawSession(data, 0);
+        Assert.IsFalse(s.WouldAddSegment(new Vector2(0, 0)));
+        s.Click(new Vector2(0, 0));
+        Assert.IsFalse(s.WouldAddSegment(new Vector2(0, 0)));
+        Assert.IsTrue(s.WouldAddSegment(new Vector2(1, 0)));
+        Assert.AreEqual(1, s.PointCount);
+    }
 }

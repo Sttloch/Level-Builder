@@ -106,69 +106,64 @@ namespace LevelBuilder.Editor
 
     /// <summary>
     /// Editor-only display of the active floor: generated renderers of floors above the active one are disabled
-    /// while the Building is selected. Never serialized (generated objects are DontSave); everything is restored
-    /// on deselection and when entering play mode. Re-applied on every Scene view repaint because regeneration
+    /// while the Building is selected. Never serialized (generated objects are DontSave). Every Building that is
+    /// not selected is restored on selection change, after a domain reload and when entering play mode (no
+    /// static bookkeeping that a reload could lose). Re-applied on every Scene view repaint because regeneration
     /// recreates the generated children.
     /// </summary>
     [InitializeOnLoad]
     static class FloorVisibility
     {
-        static readonly HashSet<Building> hidden = new HashSet<Building>();
-
         static FloorVisibility()
         {
             SceneView.duringSceneGui += OnSceneGui;
-            Selection.selectionChanged += OnSelectionChanged;
+            Selection.selectionChanged += RestoreUnselected;
             EditorApplication.playModeStateChanged += OnPlayModeChanged;
+            EditorApplication.delayCall += RestoreUnselected; // after a domain reload, once scenes are loaded
         }
 
         static void OnSceneGui(SceneView view)
         {
             if (Event.current.type != EventType.Repaint) return;
             if (EditorApplication.isPlayingOrWillChangePlaymode) return;
-            foreach (var go in Selection.gameObjects)
-            {
-                var b = go != null ? go.GetComponent<Building>() : null;
-                if (b != null) Apply(b);
-            }
-        }
-
-        static void OnSelectionChanged()
-        {
-            var keep = new HashSet<Building>();
-            foreach (var go in Selection.gameObjects)
-            {
-                var b = go != null ? go.GetComponent<Building>() : null;
-                if (b != null) keep.Add(b);
-            }
-            foreach (var b in new List<Building>(hidden))
-                if (!keep.Contains(b)) Restore(b);
-            SceneView.RepaintAll();
+            foreach (var b in SelectedBuildings()) Apply(b);
         }
 
         static void OnPlayModeChanged(PlayModeStateChange change)
         {
-            if (change == PlayModeStateChange.ExitingEditMode) RestoreAll();
+            if (change == PlayModeStateChange.ExitingEditMode)
+                foreach (var b in SceneBuildings()) SetVisible(b, _ => true);
         }
 
-        static void RestoreAll()
+        static void RestoreUnselected()
         {
-            foreach (var b in new List<Building>(hidden)) Restore(b);
-            hidden.Clear();
+            var selected = new HashSet<Building>(SelectedBuildings());
+            foreach (var b in SceneBuildings())
+                if (!selected.Contains(b)) SetVisible(b, _ => true);
+            SceneView.RepaintAll();
+        }
+
+        static IEnumerable<Building> SelectedBuildings()
+        {
+            foreach (var go in Selection.gameObjects)
+            {
+                var b = go != null ? go.GetComponent<Building>() : null;
+                if (b != null) yield return b;
+            }
+        }
+
+        // Works on 2022.3 and Unity 6 without obsolete APIs; skips assets/prefab assets.
+        static IEnumerable<Building> SceneBuildings()
+        {
+            foreach (var b in Resources.FindObjectsOfTypeAll<Building>())
+                if (b != null && !EditorUtility.IsPersistent(b) && b.gameObject.scene.IsValid()) yield return b;
         }
 
         static void Apply(Building b)
         {
             int active = BuildingEditorUtil.ActiveFloorIndex(b);
             if (active < 0) return;
-            hidden.Add(b);
             SetVisible(b, i => i <= active);
-        }
-
-        static void Restore(Building b)
-        {
-            hidden.Remove(b);
-            if (b != null) SetVisible(b, _ => true);
         }
 
         static void SetVisible(Building b, Func<int, bool> visible)

@@ -31,7 +31,7 @@ namespace LevelBuilder.Editor
                     var names = new string[data.floors.Count];
                     for (int i = 0; i < names.Length; i++) names[i] = i + ": " + data.floors[i].name;
                     int sel = EditorGUILayout.Popup("Planta activa", fi, names);
-                    if (sel != b.activeFloor) SetActiveFloor(b, sel);
+                    if (sel != fi) SetActiveFloor(b, sel);
                 }
 
                 using (new EditorGUILayout.HorizontalScope())
@@ -57,6 +57,11 @@ namespace LevelBuilder.Editor
                     if (want) ToolManager.SetActiveTool<WallTool>();
                     else ToolManager.RestorePreviousPersistentTool();
                 }
+                if (active)
+                    EditorGUILayout.HelpBox(
+                        "Clic: punto (clic en un nodo empieza desde él). Doble clic / Esc / Enter: terminar.\n" +
+                        "Doble clic en pared: dividir. Arrastrar nodo: mover. Shift+clic: seleccionar pared.\n" +
+                        "Ctrl: sin rejilla. Shift: ángulos de 15°. Supr: borrar selección.", MessageType.None);
             }
         }
 

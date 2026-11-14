@@ -142,7 +142,8 @@ namespace LevelBuilder
             return node;
         }
 
-        /// <summary>Splits a segment at the projection of p onto it (keeps the wall straight). Both halves keep thickness/height.</summary>
+        /// <summary>Splits a segment at the projection of p onto it (keeps the wall straight). Both halves keep thickness/height.
+        /// If the projection is within MergeTolerance of an endpoint, returns that endpoint and changes nothing.</summary>
         public WallNode SplitSegment(FloorData f, string segmentId, Vector2 p)
         {
             var s = f.GetSegment(segmentId);
@@ -150,7 +151,11 @@ namespace LevelBuilder
             var a = f.GetNode(s.startNodeId);
             var b = f.GetNode(s.endNodeId);
             Seg2D.DistanceToSegment(p, a.position, b.position, out float t);
-            var node = new WallNode { id = IdUtil.New(), position = Vector2.Lerp(a.position, b.position, t) };
+            var at = Vector2.Lerp(a.position, b.position, t);
+            // Never create a node on top of an endpoint (it would leave a zero-length segment).
+            if ((at - a.position).magnitude <= MergeTolerance) return a;
+            if ((at - b.position).magnitude <= MergeTolerance) return b;
+            var node = new WallNode { id = IdUtil.New(), position = at };
             f.nodes.Add(node);
             var second = new WallSegment
             {
