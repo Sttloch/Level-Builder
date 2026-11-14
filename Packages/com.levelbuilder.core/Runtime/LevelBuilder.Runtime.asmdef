@@ -1,0 +1,14 @@
+{
+  "name": "LevelBuilder.Runtime",
+  "rootNamespace": "LevelBuilder",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
