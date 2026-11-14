@@ -99,4 +99,58 @@ public class PlanarFacesTests
         Assert.Greater(SignedArea(r.regions[0].polygon), 0f);
         Assert.IsFalse(string.IsNullOrEmpty(r.regions[0].key));
     }
+
+    static bool HasRepeats(Region r)
+    {
+        var seen = new HashSet<string>();
+        foreach (var id in r.nodeIds) if (!seen.Add(id)) return true;
+        return false;
+    }
+
+    [Test] public void PillarInsideRoom_RoomHasOneHole_PillarNotExterior()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        AddSquare(b, f, 0, 0, 4);
+        var room = new HashSet<string>();
+        foreach (var s in f.segments) room.Add(s.id);
+        AddSquare(b, f, 1.5f, 1.5f, 1);
+        var r = PlanarFaces.Compute(f);
+        Region big = null;
+        foreach (var reg in r.regions) if (SignedArea(reg.polygon) > 10f) big = reg;
+        Assert.IsNotNull(big);
+        Assert.AreEqual(2, r.regions.Count);
+        Assert.AreEqual(1, big.holes.Count);
+        Assert.AreEqual(4, r.exteriorSegmentIds.Count);
+        foreach (var id in r.exteriorSegmentIds) Assert.IsTrue(room.Contains(id));
+    }
+
+    [Test] public void PillarConnectedByWall_StillHole_PolygonSimple()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        AddSquare(b, f, 0, 0, 4);
+        AddSquare(b, f, 1.5f, 1.5f, 1);
+        var link = b.AddSegment(f, new Vector2(2, 1.5f), new Vector2(2, 0));
+        var r = PlanarFaces.Compute(f);
+        Region big = null;
+        foreach (var reg in r.regions)
+        {
+            Assert.IsFalse(HasRepeats(reg));
+            if (SignedArea(reg.polygon) > 10f) big = reg;
+        }
+        Assert.IsNotNull(big);
+        Assert.AreEqual(1, big.holes.Count);
+        foreach (var s in link) Assert.IsFalse(r.exteriorSegmentIds.Contains(s.id));
+    }
+
+    [Test] public void TwoRoomsJoinedByWall_BothRegionsSimple()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        AddSquare(b, f, 0, 0, 4);
+        AddSquare(b, f, 10, 0, 4);
+        var link = b.AddSegment(f, new Vector2(4, 2), new Vector2(10, 2));
+        var r = PlanarFaces.Compute(f);
+        Assert.AreEqual(2, r.regions.Count);
+        foreach (var reg in r.regions) Assert.IsFalse(HasRepeats(reg));
+        foreach (var s in link) Assert.IsFalse(r.exteriorSegmentIds.Contains(s.id));
+    }
 }

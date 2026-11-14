@@ -10,6 +10,8 @@ namespace LevelBuilder.Geometry
         /// <summary>Counter-clockwise in the plan (x, y) plane.</summary>
         public List<Vector2> polygon = new List<Vector2>();
         public List<string> segmentIds = new List<string>();
+        /// <summary>Boundaries of free-standing components nested inside this region (clockwise).</summary>
+        public List<List<Vector2>> holes = new List<List<Vector2>>();
         /// <summary>Sorted segment ids joined by "|"; stable while topology is unchanged.</summary>
         public string key;
     }
@@ -40,38 +42,27 @@ namespace LevelBuilder.Geometry
 
             // Valid, de-duplicated segments.
             var segs = new List<WallSegment>();
+            var pairs = new HashSet<string>();
             foreach (var s in f.segments)
             {
                 if (s.startNodeId == s.endNodeId) continue;
                 if (!pos.ContainsKey(s.startNodeId) || !pos.ContainsKey(s.endNodeId)) continue;
+                string pk = string.CompareOrdinal(s.startNodeId, s.endNodeId) < 0
+                    ? s.startNodeId + "|" + s.endNodeId : s.endNodeId + "|" + s.startNodeId;
+                if (!pairs.Add(pk)) continue;
                 segs.Add(s);
             }
 
-            // Iteratively prune degree-1 nodes (dangling walls).
+            // Remove bridges (this includes dangling chains): they never bound a region and would make
+            // face polygons non-simple. Bridges are not exterior.
             var alive = new HashSet<WallSegment>(segs);
-            var degree = new Dictionary<string, int>();
-            foreach (var s in segs)
-            {
-                degree[s.startNodeId] = (degree.TryGetValue(s.startNodeId, out var d1) ? d1 : 0) + 1;
-                degree[s.endNodeId] = (degree.TryGetValue(s.endNodeId, out var d2) ? d2 : 0) + 1;
-            }
-            bool changed = true;
-            while (changed)
-            {
-                changed = false;
-                foreach (var s in segs)
-                {
-                    if (!alive.Contains(s)) continue;
-                    if (degree[s.startNodeId] <= 1 || degree[s.endNodeId] <= 1)
-                    {
-                        alive.Remove(s);
-                        degree[s.startNodeId]--;
-                        degree[s.endNodeId]--;
-                        changed = true;
-                    }
-                }
-            }
+            foreach (var br in FindBridges(segs)) alive.Remove(br);
             if (alive.Count == 0) return result;
+
+            // Connected components of what remains.
+            var parent = new Dictionary<string, string>();
+            foreach (var s in alive) { parent[s.startNodeId] = s.startNodeId; parent[s.endNodeId] = s.endNodeId; }
+            foreach (var s in alive) Union(parent, s.startNodeId, s.endNodeId);
 
             // Half-edges, outgoing lists per node sorted by angle (CCW ascending).
             var outgoing = new Dictionary<string, List<HalfEdge>>();
@@ -96,6 +87,12 @@ namespace LevelBuilder.Geometry
                     h.next = list[(idx - 1 + list.Count) % list.Count];
                 }
 
+            var regionComp = new List<string>();
+            var regionArea = new List<float>();
+            var outerPolys = new List<List<Vector2>>();
+            var outerComps = new List<string>();
+            var outerSegs = new List<List<string>>();
+
             foreach (var kv in outgoing)
                 foreach (var start in kv.Value)
                 {
@@ -113,6 +110,7 @@ namespace LevelBuilder.Geometry
                     var poly = new List<Vector2>(face.Count);
                     foreach (var e in face) poly.Add(pos[e.from]);
                     float area = SignedArea(poly);
+                    string comp = Find(parent, start.from);
 
                     if (area > 1e-6f)
                     {
@@ -128,14 +126,114 @@ namespace LevelBuilder.Geometry
                         sorted.Sort(StringComparer.Ordinal);
                         region.key = string.Join("|", sorted);
                         result.regions.Add(region);
+                        regionComp.Add(comp);
+                        regionArea.Add(area);
                     }
                     else
                     {
-                        foreach (var e in face) result.exteriorSegmentIds.Add(e.segmentId);
+                        var ids = new List<string>();
+                        foreach (var e in face) ids.Add(e.segmentId);
+                        outerPolys.Add(poly);
+                        outerComps.Add(comp);
+                        outerSegs.Add(ids);
                     }
                 }
 
+            // Outer boundaries nested in another component's region become holes; others are exterior.
+            for (int o = 0; o < outerPolys.Count; o++)
+            {
+                var poly = outerPolys[o];
+                int best = -1;
+                for (int i = 0; i < result.regions.Count; i++)
+                {
+                    if (regionComp[i] == outerComps[o]) continue;
+                    if (!PointInPolygon(poly[0], result.regions[i].polygon)) continue;
+                    if (best < 0 || regionArea[i] < regionArea[best]) best = i;
+                }
+                if (best >= 0) result.regions[best].holes.Add(poly);
+                else foreach (var id in outerSegs[o]) result.exteriorSegmentIds.Add(id);
+            }
+
             return result;
+        }
+
+        static string Find(Dictionary<string, string> p, string x)
+        {
+            while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; }
+            return x;
+        }
+
+        static void Union(Dictionary<string, string> p, string a, string b)
+        {
+            a = Find(p, a); b = Find(p, b);
+            if (a != b) p[a] = b;
+        }
+
+        static bool PointInPolygon(Vector2 pt, List<Vector2> poly)
+        {
+            bool inside = false;
+            for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+            {
+                var a = poly[i]; var b = poly[j];
+                if ((a.y > pt.y) != (b.y > pt.y) &&
+                    pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x)
+                    inside = !inside;
+            }
+            return inside;
+        }
+
+        static List<WallSegment> FindBridges(List<WallSegment> segs)
+        {
+            var adj = new Dictionary<string, List<WallSegment>>();
+            foreach (var s in segs)
+            {
+                if (!adj.TryGetValue(s.startNodeId, out var l1)) adj[s.startNodeId] = l1 = new List<WallSegment>();
+                if (!adj.TryGetValue(s.endNodeId, out var l2)) adj[s.endNodeId] = l2 = new List<WallSegment>();
+                l1.Add(s); l2.Add(s);
+            }
+            var disc = new Dictionary<string, int>();
+            var low = new Dictionary<string, int>();
+            var bridges = new List<WallSegment>();
+            int time = 0;
+            foreach (var root in new List<string>(adj.Keys))
+            {
+                if (disc.ContainsKey(root)) continue;
+                var stack = new Stack<KeyValuePair<string, WallSegment>>();
+                var idx = new Dictionary<string, int>();
+                disc[root] = low[root] = time++;
+                idx[root] = 0;
+                stack.Push(new KeyValuePair<string, WallSegment>(root, null));
+                while (stack.Count > 0)
+                {
+                    var top = stack.Peek();
+                    string u = top.Key;
+                    var list = adj[u];
+                    if (idx[u] < list.Count)
+                    {
+                        var e = list[idx[u]++];
+                        if (e == top.Value) continue;
+                        string v = e.startNodeId == u ? e.endNodeId : e.startNodeId;
+                        if (disc.ContainsKey(v)) low[u] = Math.Min(low[u], disc[v]);
+                        else
+                        {
+                            disc[v] = low[v] = time++;
+                            idx[v] = 0;
+                            stack.Push(new KeyValuePair<string, WallSegment>(v, e));
+                        }
+                    }
+                    else
+                    {
+                        stack.Pop();
+                        if (stack.Count > 0)
+                        {
+                            string par = stack.Peek().Key;
+                            low[par] = Math.Min(low[par], low[u]);
+                            if (low[u] > disc[par]) bridges.Add(top.Value);
+                        }
+                    }
+                }
+            }
+            return bridges;
         }
 
         static void AddOut(Dictionary<string, List<HalfEdge>> d, HalfEdge h)
