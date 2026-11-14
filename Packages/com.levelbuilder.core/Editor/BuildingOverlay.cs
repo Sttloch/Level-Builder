@@ -59,17 +59,21 @@ namespace LevelBuilder.Editor
                 }
                 if (active)
                     EditorGUILayout.HelpBox(
-                        "Clic: punto (clic en un nodo empieza desde él). Doble clic / Esc / Enter: terminar.\n" +
-                        "Doble clic en pared: dividir. Arrastrar nodo: mover. Shift+clic: seleccionar pared.\n" +
+                        "Clic: punto. Doble clic / Esc / Enter: terminar. Retroceso: quitar último punto.\n" +
+                        "Clic en nodo: seleccionar; otro clic en el nodo seleccionado: empezar pared desde él.\n" +
+                        "Arrastrar nodo: mover (al soltar se une a nodos / divide paredes).\n" +
+                        "Doble clic en pared: dividir. Shift+clic: seleccionar pared.\n" +
                         "Ctrl: sin rejilla. Shift: ángulos de 15°. Supr: borrar selección.", MessageType.None);
             }
         }
 
+        // View state: no Undo entry (it would spam the Undo history). SetDirty so it is still serialized; prefab
+        // instances need the explicit override record that Undo.RecordObject would otherwise have made.
         internal static void SetActiveFloor(Building b, int index)
         {
-            Undo.RecordObject(b, "Planta activa");
             b.activeFloor = Mathf.Clamp(index, 0, b.data.floors.Count - 1);
             EditorUtility.SetDirty(b);
+            if (PrefabUtility.IsPartOfPrefabInstance(b)) PrefabUtility.RecordPrefabInstancePropertyModifications(b);
             WallSelection.Clear();
             SceneView.RepaintAll();
         }

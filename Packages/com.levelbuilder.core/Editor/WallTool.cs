@@ -6,10 +6,11 @@ namespace LevelBuilder.Editor
 {
     /// <summary>
     /// Scene view tool to draw and edit the walls of the active floor.
-    /// Click: add point (double click / Esc / Enter finishes, click on the first point closes).
-    /// Ctrl: no grid snap. Shift while drawing: 15 degree angles. Shift+click (not drawing): select segment.
-    /// Not drawing: double click on a segment splits it; drag a node to move it (linked columns move together);
-    /// click a node (no drag) to select it and start a wall from it; Delete removes the selected node / segment.
+    /// Click: add point (double click / Esc / Enter finishes, click on the first point closes, Backspace removes
+    /// the last point). Ctrl: no grid snap. Shift while drawing: 15 degree angles. Shift+click (not drawing):
+    /// select segment. Not drawing: double click on a segment splits it; drag a node to move it (linked columns
+    /// move together; on release it merges into a node / splits walls it touches or crosses); click a node to
+    /// select it, click the selected node again to start a wall from it; Delete removes the selected node / segment.
     /// </summary>
     [EditorTool("Paredes", typeof(Building))]
     public class WallTool : EditorTool
@@ -18,7 +19,6 @@ namespace LevelBuilder.Editor
         public const float AngleStep = 15f;
         const float PickPixels = 10f;
         const float DragPixels = 4f;
-        const double DeleteSwallowSeconds = 0.5;
 
         static readonly int ToolHint = "LevelBuilder.WallTool".GetHashCode();
         static readonly int NodeHint = "LevelBuilder.WallTool.Node".GetHashCode();
@@ -30,17 +30,21 @@ namespace LevelBuilder.Editor
         WallDrawSession session;
         Building sessionBuilding;
 
-        // Node handle press state: click without drag starts a wall, drag moves the node in one Undo step.
+        // Node handle press state: click without drag selects (or, on the selected node, starts a wall);
+        // drag moves the node in one Undo step.
         string pressedNodeId;
         Vector2 pressMouse;
         bool pressDragged;
+        bool pressWasSelected;
         int pressUndoGroup = -1;
 
-        double lastKeyDeleteTime = -1;
+        // Set per Delete/Backspace keypress when the tool handled it, so the Delete/SoftDelete command that
+        // follows is swallowed instead of deleting the Building. Reset by the next keypress, KeyUp or click.
+        bool swallowDeleteCommand;
 
         public override GUIContent toolbarIcon =>
             new GUIContent(EditorGUIUtility.IconContent("EditCollider").image,
-                "Paredes (Level Builder): clic dibuja, doble clic en pared la divide, arrastra nodos para moverlos");
+                "Paredes (Level Builder): clic dibuja, doble clic en pared la divide, clic en nodo lo selecciona, arrastra nodos para moverlos");
 
         public override void OnActivated()
         {
@@ -194,34 +198,61 @@ namespace LevelBuilder.Editor
             if (created != null) WallSelection.SelectNode(b, f, created.id);
         }
 
+        static bool IsDeleteKey(KeyCode k) => k == KeyCode.Delete || k == KeyCode.Backspace;
+
         void HandleKeys(Building b, BuildingData data, FloorData f, int fi, Event e)
         {
-            if (e.type == EventType.KeyDown)
+            switch (e.type)
             {
-                if (session.IsDrawing && (e.keyCode == KeyCode.Escape || e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))
-                {
-                    session.Finish();
-                    e.Use();
-                }
-                else if ((e.keyCode == KeyCode.Delete || e.keyCode == KeyCode.Backspace) && DeleteSelection(b, data, f, fi))
-                {
-                    lastKeyDeleteTime = EditorApplication.timeSinceStartup;
-                    e.Use();
-                }
+                case EventType.KeyDown:
+                    if (IsDeleteKey(e.keyCode))
+                    {
+                        // While drawing, Delete/Backspace never reach Unity (it would delete the whole Building).
+                        if (session.IsDrawing)
+                        {
+                            if (e.keyCode == KeyCode.Backspace) RemoveLastPoint(b, fi);
+                            swallowDeleteCommand = true;
+                        }
+                        else swallowDeleteCommand = DeleteSelection(b, data, f, fi);
+                        if (swallowDeleteCommand) e.Use();
+                    }
+                    else
+                    {
+                        swallowDeleteCommand = false;
+                        if (session.IsDrawing && (e.keyCode == KeyCode.Escape || e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))
+                        {
+                            session.Finish();
+                            e.Use();
+                        }
+                    }
+                    break;
+                case EventType.KeyUp:
+                    if (IsDeleteKey(e.keyCode)) swallowDeleteCommand = false;
+                    break;
+                case EventType.MouseDown:
+                    swallowDeleteCommand = false;
+                    break;
+                // Delete also arrives as a command. Take it while drawing, right after this keypress was handled,
+                // or when there is a wall selection to delete; otherwise the Building can be deleted normally.
+                case EventType.ValidateCommand:
+                case EventType.ExecuteCommand:
+                    if (e.commandName != "SoftDelete" && e.commandName != "Delete") break;
+                    if (session.IsDrawing || swallowDeleteCommand) e.Use();
+                    else if (HasSelection(b, f))
+                    {
+                        if (e.type == EventType.ExecuteCommand) DeleteSelection(b, data, f, fi);
+                        e.Use();
+                    }
+                    break;
             }
-            // Delete also arrives as a command. Only take it when there is a wall selection to delete (or the
-            // KeyDown just deleted one), so otherwise the Building GameObject can still be deleted normally.
-            else if ((e.type == EventType.ValidateCommand || e.type == EventType.ExecuteCommand)
-                     && (e.commandName == "SoftDelete" || e.commandName == "Delete"))
-            {
-                bool justDeleted = EditorApplication.timeSinceStartup - lastKeyDeleteTime < DeleteSwallowSeconds;
-                if (HasSelection(b, f))
-                {
-                    if (e.type == EventType.ExecuteCommand) DeleteSelection(b, data, f, fi);
-                    e.Use();
-                }
-                else if (justDeleted) e.Use();
-            }
+        }
+
+        void RemoveLastPoint(Building b, int fi)
+        {
+            if (session.RemoveLastPointChangesData)
+                BuildingEditorUtil.Mutate(b, "Quitar punto", fi, () => session.RemoveLastPoint());
+            else
+                session.RemoveLastPoint(); // only drops the point / cancels: no data change, no Undo entry
         }
 
         static bool HasSelection(Building b, FloorData f) =>
@@ -282,6 +313,7 @@ namespace LevelBuilder.Editor
 
                 if (down && GUIUtility.hotControl == handleId)
                 {
+                    pressWasSelected = selectedNode != null && selectedNode.id == n.id;
                     WallSelection.SelectNode(b, f, n.id);
                     pressedNodeId = n.id;
                     pressMouse = mouse;
@@ -304,8 +336,20 @@ namespace LevelBuilder.Editor
 
                 if (up && pressedNodeId == n.id)
                 {
-                    if (pressDragged) Undo.CollapseUndoOperations(pressUndoGroup); // whole drag = one Undo step
-                    else session.Click(n.position); // click without drag: start a wall at this node
+                    if (pressDragged)
+                    {
+                        // Restore planarity on every floor of the moved column (merge / split / crossings),
+                        // inside the drag's Undo group, then collapse: whole drag = one Undo step.
+                        BuildingEditorUtil.Mutate(b, "Mover nodo", isLinked ? -1 : fi, () => data.ResolveLinkedColumn(n.id));
+                        Undo.CollapseUndoOperations(pressUndoGroup);
+                    }
+                    else if (pressWasSelected)
+                    {
+                        // Click (no drag) on the already selected node: start a wall from it.
+                        WallSelection.Clear();
+                        session.Click(n.position);
+                    }
+                    // else: first click on a node only selects it (Delete / Unlink work without Esc).
                     pressedNodeId = null;
                     pressUndoGroup = -1;
                 }
