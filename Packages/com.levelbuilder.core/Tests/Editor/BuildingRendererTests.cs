@@ -92,6 +92,13 @@ public class BuildingRendererTests
             Assert.IsTrue(walls.sharedMesh != null);
             Assert.Greater(walls.sharedMesh.vertexCount, 0);
             Assert.IsTrue(walls.GetComponent<MeshCollider>().sharedMesh != null);
+
+            int count = 0;
+            foreach (Transform t in clone.transform)
+                if (t.name == "Floor 0") { count++; Assert.AreEqual(HideFlags.DontSave, t.gameObject.hideFlags & HideFlags.DontSave); }
+            Assert.AreEqual(1, count);
+            var cloneWalls = clone.transform.Find("Floor 0/Walls").GetComponent<MeshFilter>();
+            Assert.AreNotSame(walls.sharedMesh, cloneWalls.sharedMesh);
         }
         finally { Object.DestroyImmediate(clone); }
     }
@@ -113,6 +120,20 @@ public class BuildingRendererTests
         var mesh = go.transform.Find("Floor 0/Walls").GetComponent<MeshFilter>().sharedMesh;
         Object.DestroyImmediate(r);
         Assert.IsTrue(mesh == null);
+        Assert.IsNull(go.transform.Find("Floor 0"));
+    }
+
+    // Ownership lives on the generated objects (marker), not in renderer memory, so it survives a domain reload.
+    [Test] public void Regenerate_DestroysPreviousMeshesWithoutInMemoryBookkeeping()
+    {
+        Square();
+        r.Regenerate();
+        var prev = go.transform.Find("Floor 0/Walls").GetComponent<MeshFilter>().sharedMesh;
+        var prevFloor = go.transform.Find("Floor 0/Floor").GetComponent<MeshFilter>().sharedMesh;
+        r.Regenerate();
+        Assert.IsTrue(prev == null);
+        Assert.IsTrue(prevFloor == null);
+        Object.DestroyImmediate(r);
         Assert.IsNull(go.transform.Find("Floor 0"));
     }
 

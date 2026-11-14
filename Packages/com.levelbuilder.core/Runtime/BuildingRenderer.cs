@@ -13,6 +13,7 @@ namespace LevelBuilder
     public class BuildingRenderer : MonoBehaviour
     {
         const HideFlags GenFlags = HideFlags.DontSave | HideFlags.NotEditable;
+        const string FallbackName = "LevelBuilder Default";
         static Material fallbackMaterial;
 
         public Material defaultMaterial;
@@ -20,7 +21,6 @@ namespace LevelBuilder
         Building building;
         bool pending;
         readonly List<int> tmp = new List<int>();
-        readonly HashSet<Mesh> owned = new HashSet<Mesh>();
         readonly SortedSet<int> toBuild = new SortedSet<int>();
 
         Building B => building != null ? building : (building = GetComponent<Building>());
@@ -30,9 +30,12 @@ namespace LevelBuilder
             var rp = GraphicsSettings.currentRenderPipeline;
             if (rp != null && rp.defaultMaterial != null) return rp.defaultMaterial;
             if (fallbackMaterial != null) return fallbackMaterial;
+            // Reuse one that survived a domain reload (DontSave objects are never unloaded).
+            foreach (var existing in Resources.FindObjectsOfTypeAll<Material>())
+                if (existing != null && existing.name == FallbackName) return fallbackMaterial = existing;
             var sh = Shader.Find("Standard");
             if (sh == null) return null;
-            fallbackMaterial = new Material(sh) { name = "LevelBuilder Default", hideFlags = HideFlags.DontSave };
+            fallbackMaterial = new Material(sh) { name = FallbackName, hideFlags = HideFlags.DontSave };
             return fallbackMaterial;
         }
 
@@ -68,8 +71,6 @@ namespace LevelBuilder
                 var t = transform.GetChild(c);
                 if (IsGeneratedFloor(t, out _)) DestroyFloorObject(t.gameObject);
             }
-            foreach (var m in owned) if (m != null) DestroyObj(m);
-            owned.Clear();
         }
 
         void OnChanged()
@@ -155,6 +156,9 @@ namespace LevelBuilder
 
             var root = new GameObject("Floor " + i) { hideFlags = GenFlags };
             root.transform.SetParent(transform, false);
+            var marker = root.AddComponent<GeneratedFloorMarker>();
+            marker.ownerId = GetInstanceID();
+            marker.hideFlags = GenFlags | HideFlags.HideInInspector;
             AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation));
             AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f));
             AddPart(root.transform, "Ceiling", SlabMeshBuilder.BuildCeiling(f, top));
@@ -170,7 +174,6 @@ namespace LevelBuilder
             var mesh = md.ToMesh();
             mesh.hideFlags = GenFlags;
             mesh.name = name;
-            owned.Add(mesh);
             mf.sharedMesh = mesh;
             mr.sharedMaterial = defaultMaterial != null ? defaultMaterial : DefaultMaterial();
             if (mesh.vertexCount > 0) mc.sharedMesh = mesh;
@@ -179,10 +182,11 @@ namespace LevelBuilder
         // Only meshes this instance created are destroyed; inherited (e.g. Instantiate-copied) ones are shared.
         void DestroyFloorObject(GameObject root)
         {
-            foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
+            var marker = root.GetComponent<GeneratedFloorMarker>();
+            if (marker != null && marker.ownerId == GetInstanceID())
             {
-                var m = mf.sharedMesh;
-                if (m != null && owned.Remove(m)) DestroyObj(m);
+                foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
+                    if (mf.sharedMesh != null) DestroyObj(mf.sharedMesh);
             }
             DestroyObj(root);
         }
