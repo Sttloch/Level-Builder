@@ -18,6 +18,11 @@ namespace LevelBuilder
         static Material fallbackMaterial;
 
         public Material defaultMaterial;
+        /// <summary>Window glass. Null: a transparent clone of the default material, created once and cached.</summary>
+        public Material glassMaterial;
+
+        const string GlassPrefix = "LevelBuilder Glass ";
+        Material generatedGlass;
 
         Building building;
         bool pending;
@@ -105,6 +110,8 @@ namespace LevelBuilder
                 var t = transform.GetChild(c);
                 if (IsGeneratedFloor(t, out _)) DestroyFloorObject(t.gameObject);
             }
+            if (generatedGlass == null) generatedGlass = FindGeneratedGlass(null);
+            if (generatedGlass != null) { DestroyObj(generatedGlass); generatedGlass = null; }
         }
 
         void OnChanged()
@@ -196,31 +203,211 @@ namespace LevelBuilder
             AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation));
             AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f));
             AddPart(root.transform, "Ceiling", SlabMeshBuilder.BuildCeiling(f, top));
+            BuildOpenings(root.transform, f);
         }
+
+        Material BaseMaterial => defaultMaterial != null ? defaultMaterial : DefaultMaterial();
 
         void AddPart(Transform parent, string name, MeshData md)
         {
-            var go = new GameObject(name) { hideFlags = GenFlags };
-            go.transform.SetParent(parent, false);
-            var mf = go.AddComponent<MeshFilter>();
-            var mr = go.AddComponent<MeshRenderer>();
+            var go = AddMeshObject(parent, name, md, BaseMaterial, out var mesh);
             var mc = go.AddComponent<MeshCollider>();
-            var mesh = md.ToMesh();
-            mesh.hideFlags = GenFlags;
-            mesh.name = name;
-            mf.sharedMesh = mesh;
-            mr.sharedMaterial = defaultMaterial != null ? defaultMaterial : DefaultMaterial();
             if (mesh.vertexCount > 0) mc.sharedMesh = mesh;
         }
 
-        // Only meshes this instance created are destroyed; inherited (e.g. Instantiate-copied) ones are shared.
+        static GameObject AddMeshObject(Transform parent, string name, MeshData md, Material material, out Mesh mesh)
+        {
+            var go = NewChild(parent, name);
+            var mf = go.AddComponent<MeshFilter>();
+            var mr = go.AddComponent<MeshRenderer>();
+            mesh = md.ToMesh();
+            mesh.hideFlags = GenFlags;
+            mesh.name = name;
+            mf.sharedMesh = mesh;
+            mr.sharedMaterial = material;
+            return go;
+        }
+
+        static GameObject NewChild(Transform parent, string name)
+        {
+            var go = new GameObject(name) { hideFlags = GenFlags };
+            go.transform.SetParent(parent, false);
+            return go;
+        }
+
+        // ---- Doors and windows (valid openings only) ----
+
+        const float LeafGap = 0.01f;
+        const float LeafThickness = 0.04f;
+        const float FrameBar = 0.05f;
+
+        void BuildOpenings(Transform root, FloorData f)
+        {
+            Transform doors = null, windows = null;
+            foreach (var kv in OpeningLayout.Compute(f))
+            {
+                var s = f.GetSegment(kv.Key);
+                var a = s != null ? f.GetNode(s.startNodeId) : null;
+                var e = s != null ? f.GetNode(s.endNodeId) : null;
+                if (a == null || e == null) continue;
+                var d = e.position - a.position;
+                if (d.sqrMagnitude < 1e-10f) continue;
+                d.Normalize();
+                // Forward = normal of the /R face, −LeftPerp(d); plan (x, y) -> local (x, elevation, y).
+                var rot = Quaternion.LookRotation(new Vector3(d.y, 0f, -d.x), Vector3.up);
+                foreach (var r in kv.Value)
+                {
+                    var o = r.opening;
+                    if (!r.valid || o == null || string.IsNullOrEmpty(o.id)) continue;
+                    if (o.type != OpeningType.Door && o.type != OpeningType.Window) continue;
+                    var p = a.position + d * ((r.u0 + r.u1) * 0.5f);
+                    var pos = new Vector3(p.x, f.elevation, p.y);
+                    if (o.type == OpeningType.Door)
+                    {
+                        if (doors == null) doors = NewChild(root, "Doors").transform;
+                        BuildDoor(doors, f, o, pos, rot);
+                    }
+                    else
+                    {
+                        if (windows == null) windows = NewChild(root, "Windows").transform;
+                        BuildWindow(windows, o, pos, rot);
+                    }
+                }
+            }
+        }
+
+        void BuildDoor(Transform parent, FloorData f, WallOpening o, Vector3 pos, Quaternion rot)
+        {
+            var go = NewChild(parent, o.id);
+            go.SetActive(false); // configure fully before Door.Awake/OnEnable run (players, play mode)
+            go.transform.localPosition = pos;
+            go.transform.localRotation = rot;
+            var settings = o.door != null ? o.door.Clone() : new DoorSettings();
+            var size = new Vector3(o.width - 2f * LeafGap, o.height - LeafGap, LeafThickness);
+
+            GameObject leaf;
+            if (settings.leafPrefab != null)
+            {
+                leaf = NewChild(go.transform, "Leaf");
+                var inst = Instantiate(settings.leafPrefab, leaf.transform, false);
+                inst.name = settings.leafPrefab.name;
+                inst.transform.localPosition = Vector3.zero;
+                SetGenFlags(inst);
+                OpeningBuilder.FitToBox(inst, size);
+                if (OpeningBuilder.TryLocalBounds(inst.transform, out var fitted) && fitted.size.z > 1e-4f) size.z = fitted.size.z;
+            }
+            else
+                leaf = AddMeshObject(go.transform, "Leaf", OpeningBuilder.DefaultLeaf(size.x, size.y, size.z), BaseMaterial, out _);
+
+            var box = leaf.AddComponent<BoxCollider>();
+            box.size = size;
+            box.center = new Vector3(0f, size.y * 0.5f, 0f);
+            // Kinematic body: moving the leaf's collider must not count as moving a static collider.
+            var body = leaf.AddComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.useGravity = false;
+
+            var door = go.AddComponent<Door>();
+            door.settings = settings;
+            door.leaf = leaf.transform;
+            door.leafSize = size;
+            door.EnsureTrigger();
+            // Look the opening up by id when invoked: building.data may have been replaced (Undo) since generation.
+            var bld = B;
+            string floorId = f.id, openingId = o.id;
+            door.onOpened.AddListener(() => Forward(bld, floorId, openingId, true));
+            door.onClosed.AddListener(() => Forward(bld, floorId, openingId, false));
+            go.SetActive(true);
+        }
+
+        static void Forward(Building bld, string floorId, string openingId, bool opened)
+        {
+            if (bld == null || bld.data == null) return;
+            var f = bld.data.floors.Find(x => x != null && x.id == floorId);
+            if (f == null) return;
+            var (_, o) = bld.data.FindOpening(f, openingId);
+            if (o == null || o.door == null) return;
+            var ev = opened ? o.door.onOpened : o.door.onClosed;
+            ev?.Invoke();
+        }
+
+        void BuildWindow(Transform parent, WallOpening o, Vector3 pos, Quaternion rot)
+        {
+            var go = NewChild(parent, o.id);
+            go.transform.localPosition = pos;
+            go.transform.localRotation = rot;
+            if (o.windowPrefab != null)
+            {
+                var inst = Instantiate(o.windowPrefab, go.transform, false);
+                inst.name = o.windowPrefab.name;
+                inst.transform.localPosition = Vector3.zero;
+                SetGenFlags(inst);
+                OpeningBuilder.FitToBox(inst, new Vector3(o.width, o.height, 0f));
+                inst.transform.localPosition += new Vector3(0f, o.sill, 0f);
+                return;
+            }
+            var frame = AddMeshObject(go.transform, "Frame", OpeningBuilder.WindowFrame(o.width, o.height, FrameBar), BaseMaterial, out _);
+            frame.transform.localPosition = new Vector3(0f, o.sill, 0f);
+            float gw = Mathf.Max(0f, o.width - 2f * FrameBar), gh = Mathf.Max(0f, o.height - 2f * FrameBar);
+            var glass = AddMeshObject(go.transform, "Glass", OpeningBuilder.Glass(gw, gh), GlassFor(), out _);
+            glass.transform.localPosition = new Vector3(0f, o.sill + FrameBar, 0f);
+            var box = glass.AddComponent<BoxCollider>(); // the window blocks passage like the wall it sits in
+            box.size = new Vector3(gw, gh, 0.02f);
+            box.center = new Vector3(0f, gh * 0.5f, 0f);
+        }
+
+        static void SetGenFlags(GameObject g)
+        {
+            foreach (var t in g.GetComponentsInChildren<Transform>(true)) t.gameObject.hideFlags = GenFlags;
+        }
+
+        Material GlassFor()
+        {
+            if (glassMaterial != null) return glassMaterial;
+            var basis = BaseMaterial;
+            // The cached clone survives domain reloads as a DontSave object: find it by name instead of leaking one.
+            if (generatedGlass == null) generatedGlass = FindGeneratedGlass(basis);
+            if (generatedGlass != null && generatedGlass.name != GlassName(basis))
+            {
+                DestroyObj(generatedGlass); // base material changed
+                generatedGlass = null;
+            }
+            if (generatedGlass == null)
+            {
+                generatedGlass = GlassMaterial.Create(basis);
+                if (generatedGlass != null) generatedGlass.name = GlassName(basis);
+            }
+            return generatedGlass;
+        }
+
+        string GlassName(Material basis) =>
+            GlassPrefix + GeneratedFloorMarker.KeyOf(this) + "/" + (basis != null ? GeneratedFloorMarker.KeyOf(basis) : 0UL);
+
+        // basis == null: any glass this renderer created, whatever it was based on.
+        Material FindGeneratedGlass(Material basis)
+        {
+            string exact = basis != null ? GlassName(basis) : null;
+            string prefix = GlassPrefix + GeneratedFloorMarker.KeyOf(this) + "/";
+            Material any = null;
+            foreach (var m in Resources.FindObjectsOfTypeAll<Material>())
+            {
+                if (m == null || (m.hideFlags & HideFlags.DontSave) == 0 || !m.name.StartsWith(prefix, System.StringComparison.Ordinal)) continue;
+                if (m.name == exact) return m;
+                if (any == null) any = m;
+            }
+            return any;
+        }
+
+        // Only meshes this instance created are destroyed: inherited (e.g. Instantiate-copied) ones are shared,
+        // and meshes without DontSave (a user prefab's assets) are never touched.
         void DestroyFloorObject(GameObject root)
         {
             var marker = root.GetComponent<GeneratedFloorMarker>();
             if (marker != null && marker.ownerId == GeneratedFloorMarker.KeyOf(this))
             {
                 foreach (var mf in root.GetComponentsInChildren<MeshFilter>(true))
-                    if (mf.sharedMesh != null) DestroyObj(mf.sharedMesh);
+                    if (mf.sharedMesh != null && (mf.sharedMesh.hideFlags & HideFlags.DontSave) == HideFlags.DontSave)
+                        DestroyObj(mf.sharedMesh);
             }
             DestroyObj(root);
         }
