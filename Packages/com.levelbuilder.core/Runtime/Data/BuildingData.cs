@@ -27,6 +27,23 @@ namespace LevelBuilder
             return f;
         }
 
+        /// <summary>Removes the top floor. The last remaining floor is never removed; returns false then.</summary>
+        public bool RemoveTopFloor()
+        {
+            if (floors.Count <= 1) return false;
+            floors.RemoveAt(floors.Count - 1);
+            return true;
+        }
+
+        /// <summary>Sets a floor's height and restacks the elevations of the floors above it.</summary>
+        public void SetFloorHeight(int index, float height)
+        {
+            if (index < 0 || index >= floors.Count) return;
+            floors[index].height = height;
+            for (int i = index + 1; i < floors.Count; i++)
+                floors[i].elevation = floors[i - 1].elevation + floors[i - 1].height;
+        }
+
         void CopyExteriorFrom(FloorData below, FloorData f)
         {
             var exterior = PlanarFaces.Compute(below).exteriorSegmentIds;

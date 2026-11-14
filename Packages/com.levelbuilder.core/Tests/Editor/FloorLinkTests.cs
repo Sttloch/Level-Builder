@@ -120,4 +120,35 @@ public class FloorLinkTests
         Assert.AreEqual(6, f1.nodes.Count);
         Assert.IsTrue(f1.nodes.All(n => string.IsNullOrEmpty(n.linkedBelowId)));
     }
+
+    [Test] public void RemoveTopFloor_RemovesOnlyLastFloor()
+    {
+        var b = new BuildingData(); var f0 = b.AddFloor();
+        AddSquareWithMiddle(b, f0);
+        var f1 = b.AddFloor();
+        Assert.IsTrue(b.RemoveTopFloor());
+        Assert.AreEqual(1, b.floors.Count);
+        Assert.AreSame(f0, b.floors[0]);
+        Assert.IsFalse(b.floors.Contains(f1));
+    }
+
+    [Test] public void RemoveTopFloor_KeepsLastRemainingFloor()
+    {
+        var b = new BuildingData(); b.AddFloor();
+        Assert.IsFalse(b.RemoveTopFloor());
+        Assert.AreEqual(1, b.floors.Count);
+    }
+
+    [Test] public void SetFloorHeight_RestacksUpperFloors()
+    {
+        var b = new BuildingData(); var f0 = b.AddFloor();
+        AddSquareWithMiddle(b, f0);
+        var f1 = b.AddFloor();
+        var f2 = b.AddFloor();
+        b.SetFloorHeight(0, 4f);
+        Assert.AreEqual(4f, f0.height, 1e-5f);
+        Assert.AreEqual(0f, f0.elevation, 1e-5f);
+        Assert.AreEqual(4f, f1.elevation, 1e-5f);
+        Assert.AreEqual(4f + f1.height, f2.elevation, 1e-5f);
+    }
 }
