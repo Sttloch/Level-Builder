@@ -144,6 +144,99 @@ namespace LevelBuilder.Tests
             var box = d.GetComponent<BoxCollider>();
             Assert.IsNotNull(box);
             Assert.IsTrue(box.isTrigger);
+            Assert.AreEqual(new Vector3(0.9f, 2.1f, 3f), box.size);
+            Assert.AreEqual(new Vector3(0f, 1.05f, 0f), box.center);
+        }
+
+        readonly System.Collections.Generic.List<GameObject> _extras = new System.Collections.Generic.List<GameObject>();
+
+        [TearDown] public void TearDownExtras()
+        {
+            foreach (var g in _extras) if (g != null) Object.DestroyImmediate(g);
+            _extras.Clear();
+        }
+
+        Collider Occupant(string tag = "Player")
+        {
+            var g = new GameObject("occ");
+            g.tag = tag;
+            _extras.Add(g);
+            return g.AddComponent<BoxCollider>();
+        }
+
+        Door Prox(string playerTag = "Player")
+        {
+            var d = Make(new DoorSettings { activation = DoorActivation.Proximity, playerTag = playerTag });
+            d.EnsureTrigger();
+            return d;
+        }
+
+        [Test] public void Door_Proximity_TagMatching()
+        {
+            var d = Prox();
+            d.HandleEnter(Occupant("Untagged"));
+            Assert.IsFalse(d.IsOpen);
+            d.HandleEnter(Occupant("Player"));
+            Assert.IsTrue(d.IsOpen);
+
+            var any = Prox("");
+            any.HandleEnter(Occupant("Untagged"));
+            Assert.IsTrue(any.IsOpen);
+        }
+
+        [Test] public void Door_Proximity_ClosesOnlyAfterLastExit()
+        {
+            var d = Prox();
+            var a = Occupant(); var b = Occupant();
+            d.HandleEnter(a); d.HandleEnter(b);
+            Assert.IsTrue(d.IsOpen);
+            d.HandleExit(a);
+            Assert.IsTrue(d.IsOpen);
+            d.HandleExit(b);
+            Assert.IsFalse(d.IsOpen);
+        }
+
+        [Test] public void Door_Proximity_DestroyedOrDisabledOccupantCloses()
+        {
+            var d = Prox();
+            var a = Occupant();
+            d.HandleEnter(a); d.Poll();
+            Assert.IsTrue(d.IsOpen);
+            Object.DestroyImmediate(a.gameObject);
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
+
+            var b = Occupant();
+            d.HandleEnter(b); d.Poll();
+            Assert.IsTrue(d.IsOpen);
+            b.gameObject.SetActive(false);
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
+
+            var c = Occupant();
+            d.HandleEnter(c); d.Poll();
+            c.enabled = false;
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
+        }
+
+        [Test] public void Door_Interact_TogglesOnlyWithOccupant()
+        {
+            var d = Make(new DoorSettings { activation = DoorActivation.Interact });
+            d.EnsureTrigger();
+            d.interactSource = _ => true;
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);               // nobody inside
+            var a = Occupant();
+            d.HandleEnter(a);
+            Assert.IsFalse(d.IsOpen);               // Interact does not open on enter
+            d.Poll();
+            Assert.IsTrue(d.IsOpen);
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
+            a.enabled = false;                      // disabled occupant does not count
+            d.Poll();
+            Assert.IsFalse(d.IsOpen);
         }
     }
 }

@@ -61,9 +61,26 @@ namespace LevelBuilder
         void Update()
         {
             Tick(Time.deltaTime);
-            if (settings != null && settings.activation == DoorActivation.Interact && HasOccupant()
-                && DoorInput.InteractPressed(settings.key))
-                Toggle();
+            Poll();
+        }
+
+        internal System.Func<KeyCode, bool> interactSource = DoorInput.InteractPressed;
+        bool _hadOccupant;
+
+        /// <summary>Per-frame occupancy pass: prunes destroyed/disabled occupants, closes an emptied Proximity door, handles Interact.</summary>
+        internal void Poll()
+        {
+            bool has = HasOccupant();
+            if (settings != null)
+            {
+                if (settings.activation == DoorActivation.Proximity)
+                {
+                    if (_hadOccupant && !has) Close();
+                }
+                else if (settings.activation == DoorActivation.Interact && has && interactSource(settings.key))
+                    Toggle();
+            }
+            _hadOccupant = has;
         }
 
         public void Tick(float dt)
@@ -125,11 +142,14 @@ namespace LevelBuilder
 
         bool HasOccupant()
         {
-            _inside.RemoveWhere(c => c == null);
+            _inside.RemoveWhere(c => c == null || !c.enabled || !c.gameObject.activeInHierarchy);
             return _inside.Count > 0;
         }
 
-        void OnTriggerEnter(Collider other)
+        void OnTriggerEnter(Collider other) { HandleEnter(other); }
+        void OnTriggerExit(Collider other) { HandleExit(other); }
+
+        internal void HandleEnter(Collider other)
         {
             if (!Matches(other)) return;
             _inside.Add(other);
@@ -137,11 +157,12 @@ namespace LevelBuilder
                 Open(other.transform.position);
         }
 
-        void OnTriggerExit(Collider other)
+        internal void HandleExit(Collider other)
         {
             if (!_inside.Remove(other)) return;
             if (settings != null && settings.activation == DoorActivation.Proximity && !HasOccupant())
                 Close();
+            _hadOccupant = HasOccupant();
         }
     }
 }
