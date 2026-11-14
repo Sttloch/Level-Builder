@@ -42,7 +42,7 @@ public class WallMeshBuilderTests
     /// after welding positions within 1e-4 and splitting edges at vertices lying on them
     /// (T-junctions), every directed edge a→b must be matched by the same number of b→a edges.
     /// </summary>
-    static void AssertWatertight(MeshData md, float baseY)
+    internal static void AssertWatertight(MeshData md, float baseY)
     {
         const float tol = 1e-4f;
         var pos = new List<Vector3>();
