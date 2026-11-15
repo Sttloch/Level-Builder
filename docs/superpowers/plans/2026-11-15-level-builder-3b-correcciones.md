@@ -123,6 +123,23 @@
 
 ---
 
+### Task 5b: Hueco de escalera ajustable (personajes de distintos tamaños)
+
+**Files:**
+- Modify: `Runtime/Data/StairData.cs`, `Runtime/Data/BuildingData.cs` (`ClampStair`), `Runtime/Geometry/StairLayout.cs`, `Editor/BuildingInspector.cs`, `Editor/StairTool.cs`
+- Test: `Tests/Editor/StairLayoutTests.cs`
+
+**Interfaces:**
+- Produces: en `StairData`: `float headroom = 2.25f` (altura libre que se garantiza en el borde del hueco; rango 1.5–4.0; sustituye a la constante `Headroom + CapsuleAllowance`; sin rampa se sigue sumando el `StepAllowance`) y `float holeMargin = 0f` (metros extra que el hueco se alarga hacia el inicio de la escalera y se ensancha por cada lado; rango 0–1.0). El margen lateral se valida igual que el resto del hueco (si toca una pared → `HoleCrossesWall`).
+- Inspector de la escalera: sección "Hueco" con **"Altura libre"** y **"Margen del hueco"** (Undo), y una línea informativa "Personaje de hasta X m" (= altura libre − 0.25).
+- `StairTool`: con la escalera seleccionada, tirador en el borde inicial del hueco (sobre la planta de arriba) que, al arrastrarlo hacia el inicio, aumenta `holeMargin` (paso 0.05 m, un paso de Undo).
+
+- [ ] **Step 1: Write the failing tests:** `Headroom_HigherValue_StartsHoleEarlier`, `HoleMargin_ExtendsAndWidensHole` (área y extremos crecen en el margen), `HoleMargin_IntoWall_IsHoleCrossesWall`, `ClampStair_ClampsHeadroomAndMargin`, `OldData_DefaultsKeepCurrentHole` (una escalera con los valores por defecto da el mismo hueco que antes).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** RUN_TESTS → PASS (incluidos los tests de subida y bajada).
+- [ ] **Step 5: Commit** `feat: adjustable stair hole headroom and margin`
+
+---
+
 ### Task 6: Verificación manual
 
 - [ ] **Step 1: Write** `docs/superpowers/plans/2026-11-15-level-builder-3b-verificacion-manual.md`: imán (dibujar una pared interior entre dos existentes sin Ctrl, y con Ctrl libre), quitar pared con el botón y con Supr + Undo, balcón con antepecho de 1 m y pasarela con bordes a 0 m (sin techo encima), "+ Planta" con balcón, tirador de altura (paso 0.1, 0 = borde, Undo), Play subiendo y bajando la escalera con un `CharacterController` estándar.
