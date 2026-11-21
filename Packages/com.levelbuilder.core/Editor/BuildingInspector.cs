@@ -239,7 +239,7 @@ namespace LevelBuilder.Editor
                 "Altura libre que el hueco garantiza en su borde (1.5–4 m). Súbela para personajes más altos.");
             StairFloat(b, from, sid, "Margen del hueco", "Margen del hueco", s.holeMargin, (st, v) => st.holeMargin = v,
                 "Metros extra que el hueco se alarga hacia el inicio de la escalera y se ensancha por cada lado (0–1 m).");
-            EditorGUILayout.LabelField("Personaje de hasta " + (s.headroom - 0.25f).ToString("0.00") + " m", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("Personaje de hasta " + (s.headroom - StairLayout.CharacterMargin).ToString("0.00") + " m", EditorStyles.miniLabel);
 
             // Validated here once per Layout pass, so the panel is current right after an edit (the renderer's
             // StairValidations only catch up at its next regeneration).

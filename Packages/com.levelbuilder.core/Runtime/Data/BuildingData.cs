@@ -570,7 +570,7 @@ namespace LevelBuilder
             var pb = f.GetNode(second.startNodeId == nodeId ? second.endNodeId : second.startNodeId);
             if (pa == null || pb == null || pa == pb) return;
             if (!Mathf.Approximately(first.thickness, second.thickness)
-                || !Mathf.Approximately(first.heightOverride, second.heightOverride)) return;
+                || !Mathf.Approximately(first.Height(f), second.Height(f))) return;
             if (Vector2.Angle(pa.position - m.position, m.position - pb.position) >= 0.5f) return;
             // JoinSplit needs first.end == m and second.start == m.
             if (first.startNodeId == nodeId) ReverseSegment(f, first);

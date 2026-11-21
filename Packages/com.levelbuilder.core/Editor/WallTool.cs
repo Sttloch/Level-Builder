@@ -44,7 +44,7 @@ namespace LevelBuilder.Editor
 
         public override GUIContent toolbarIcon =>
             new GUIContent(EditorGUIUtility.IconContent("EditCollider").image,
-                "Paredes (Level Builder): clic dibuja, doble clic en pared la divide, clic en nodo lo selecciona, arrastra nodos para moverlos");
+                "Paredes (Level Builder): clic dibuja, doble clic en pared la divide, clic en nodo lo selecciona, arrastra nodos para moverlos. Con una pared seleccionada, arrastra el tirador superior para cambiar su altura");
 
         public override void OnActivated()
         {

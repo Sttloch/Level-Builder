@@ -504,6 +504,18 @@ namespace LevelBuilder.Tests
         }
 
         [Test]
+        public void RemoveWall_InheritedAndExplicitFullHeight_Merge()
+        {
+            b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0));
+            var s2 = b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0))[0];
+            s2.heightOverride = f.height;
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            b.RemoveWall(f, div.id);
+            Assert.AreEqual(1, f.segments.Count);
+            Assert.AreEqual(2, f.nodes.Count);
+        }
+
+        [Test]
         public void RemoveWall_KeepsLinkedNodes()
         {
             BuildRoomWithDivider(f);

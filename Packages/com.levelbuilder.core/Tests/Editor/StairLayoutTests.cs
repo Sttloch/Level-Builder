@@ -520,6 +520,22 @@ public class StairLayoutTests
         Assert.Less(Triangulator.SignedArea(r.hole), Triangulator.SignedArea(Hull(pts)) - 0.1f);
     }
 
+    [Test] public void HoleMargin_UStairNarrowGap_BigMargin_KeepsArrivalClear()
+    {
+        // Gap between flights (0.3 m) under 2x margin: the offset outline self-intersects; the fallback must be
+        // the exact margin-0 outline, not a hull that swallows the arrival zone.
+        var s = Stair(P(0, 0), P(0, 4), P(1.3f, 4), P(1.3f, 0));
+        s.holeMargin = 1f;
+        var r = Compute(s);
+        Assert.IsTrue(r.ok, r.error);
+        Assert.IsNotNull(r.hole);
+        Assert.IsTrue(IsSimplePolygon(r.hole), "hole is simple");
+        AssertHoleCoversNeeded(r);
+        Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.arrivalZone), r.hole), "arrival centroid");
+        foreach (var v in r.arrivalZone)
+            Assert.IsFalse(PlanarFaces.PointInPolygon(v, r.hole) && !OnBoundary(r.hole, v), "arrival vertex " + v);
+    }
+
     static List<Vector2> Hull(List<Vector2> pts)
     {
         var p = new List<Vector2>(pts);

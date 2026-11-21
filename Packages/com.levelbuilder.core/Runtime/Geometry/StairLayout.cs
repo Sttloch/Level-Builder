@@ -57,6 +57,11 @@ namespace LevelBuilder.Geometry
         public const float DefaultHeadroom = Headroom + CapsuleAllowance;
         /// <summary>Radius plus skin width of a default CharacterController (0.5 + 0.08).</summary>
         public const float CapsuleRadius = 0.58f;
+        /// <summary>
+        /// Character height the default headroom leaves room for: headroom - CharacterMargin (the 0.1 m of the
+        /// 2.1 m base headroom over a 2 m character plus CapsuleAllowance).
+        /// </summary>
+        public const float CharacterMargin = 0.25f;
         public const float CornerAngle = 30f;
         /// <summary>Largest turn a single Corner point may make (U-stairs use two corners).</summary>
         public const float MaxCornerTurn = 150f;
@@ -238,7 +243,7 @@ namespace LevelBuilder.Geometry
                 // holeMargin: outward offset of that single outline (back and sides), except along the arrival
                 // zone's boundary (its near side is the top riser edge; on U-stairs a side can run beside a flight):
                 // the arrival must stay clear of the hole.
-                if (margin > 0f) r.hole = OffsetOutline(r.hole, margin, r.arrivalZone);
+                if (margin > 0f) r.hole = OffsetOutline(r.hole, margin, r.arrivalZone) ?? r.hole;
             }
 
             r.ok = true;
@@ -248,8 +253,8 @@ namespace LevelBuilder.Geometry
         /// <summary>
         /// Outward offset of a CCW simple polygon by d, except edges lying on an edge of keep (offset 0).
         /// Each vertex goes to the intersection of its two offset edge lines (miter); at convex vertices a miter
-        /// farther than 2*d from the vertex is bevelled (one point per edge). Falls back to the convex hull of the
-        /// offset points if the result is not simple.
+        /// farther than 2*d from the vertex is bevelled (one point per edge). Returns null if the result is not
+        /// simple (the caller keeps the exact margin-0 outline: a hull would ignore the edges held at offset 0).
         /// </summary>
         internal static List<Vector2> OffsetOutline(List<Vector2> poly, float d, List<Vector2> keep)
         {
@@ -315,7 +320,22 @@ namespace LevelBuilder.Geometry
                 }
             }
             while (res.Count > 1 && (res[0] - res[res.Count - 1]).sqrMagnitude < Tol * Tol) res.RemoveAt(res.Count - 1);
-            return res.Count >= 3 && IsSimple(res) ? res : ConvexHull(res);
+            if (res.Count < 3 || !IsSimple(res)) return null;
+            // A narrow notch (U-stair gap under 2*d) can leave a simple but wrong outline: it must still enclose
+            // the original outline, and keep's vertices must not end up strictly inside it.
+            foreach (var v in poly)
+                if (!PlanarFaces.PointInPolygon(v, res) && !OnOutline(res, v)) return null;
+            if (keep != null)
+                foreach (var v in keep)
+                    if (PlanarFaces.PointInPolygon(v, res) && !OnOutline(res, v)) return null;
+            return res;
+        }
+
+        static bool OnOutline(List<Vector2> poly, Vector2 p)
+        {
+            for (int i = 0; i < poly.Count; i++)
+                if (OnSegment(poly[i], poly[(i + 1) % poly.Count], p)) return true;
+            return false;
         }
 
         static bool OnSegment(Vector2 a, Vector2 b, Vector2 p)

@@ -45,3 +45,7 @@ Preparación: crea un edificio (`GameObject > Level Builder > Building`), dibuja
 
 7. Compatibilidad de versiones:
    - Abre el paquete en Unity 2022.3 y en una versión 6.4+: compila sin errores ni avisos y las escaleras se generan igual.
+
+8. Escaleras existentes (guardadas antes de este cambio):
+   - Se regeneran con huecos algo mayores: el hueco ahora siempre deja espacio para el desplazamiento de escalón (step offset) de la cápsula, necesario para poder bajar andando.
+   - Las escaleras antiguas, sin altura libre guardada, usan 2.25 m por defecto.
