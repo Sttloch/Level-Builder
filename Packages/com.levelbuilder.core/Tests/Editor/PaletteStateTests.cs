@@ -67,6 +67,25 @@ namespace LevelBuilder.Tests
             Assert.IsTrue(lib.entries.Any(x => x.name == "Tile"));
         }
 
+        [TestCase("0.5 x 0.5", 0.5f, 0.5f)]
+        [TestCase("0,5 x 0,5", 0.5f, 0.5f)]
+        [TestCase("2x2", 2f, 2f)]
+        [TestCase("1,5 × 3", 1.5f, 3f)]
+        [TestCase("2;4", 2f, 4f)]
+        [TestCase("3", 3f, 3f)]
+        public void TryParseSize_Valid(string text, float x, float y)
+        {
+            Assert.IsTrue(PaletteOps.TryParseSize(text, out var s));
+            Assert.AreEqual(x, s.x, 1e-5f);
+            Assert.AreEqual(y, s.y, 1e-5f);
+        }
+
+        [TestCase("")] [TestCase("abc")] [TestCase("0 x 1")] [TestCase("-1 x 2")] [TestCase("1x2x3")]
+        public void TryParseSize_Invalid(string text)
+        {
+            Assert.IsFalse(PaletteOps.TryParseSize(text, out _));
+        }
+
         [Test]
         public void Filter_BySearchAndCategory()
         {

@@ -57,6 +57,29 @@ namespace LevelBuilder.Editor
             }
         }
 
+        /// <summary>Parses "W x H" (separator x, X, × or ;; decimal '.' or ','). A single value gives a square size.</summary>
+        public static bool TryParseSize(string text, out Vector2 size)
+        {
+            size = Vector2.one;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            var parts = text.Split('x', 'X', '×', ';');
+            if (parts.Length > 2) return false;
+            var v = new float[parts.Length];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                var t = parts[i].Trim().Replace(',', '.');
+                if (!float.TryParse(t, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out v[i]) || !(v[i] > 0f)
+                    || float.IsInfinity(v[i])) return false;
+            }
+            size = new Vector2(v[0], v.Length > 1 ? v[1] : v[0]);
+            return true;
+        }
+
+        public static string FormatSize(Vector2 s) =>
+            s.x.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " x " +
+            s.y.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
         public static List<string> Categories(MaterialLibrary lib)
         {
             if (lib == null) return new List<string>();

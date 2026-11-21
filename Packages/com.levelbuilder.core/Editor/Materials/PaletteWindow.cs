@@ -15,8 +15,16 @@ namespace LevelBuilder.Editor
         [MenuItem("Window/Level Builder/Paleta")]
         public static void Open() => GetWindow<PaletteWindow>("Paleta");
 
-        void OnEnable() { PaletteState.Changed += Repaint; }
-        void OnDisable() { PaletteState.Changed -= Repaint; }
+        void OnEnable() { PaletteState.Changed += Repaint; Undo.undoRedoPerformed += OnUndoRedo; }
+        void OnDisable() { PaletteState.Changed -= Repaint; Undo.undoRedoPerformed -= OnUndoRedo; }
+
+        void OnUndoRedo()
+        {
+            var b = SelectedBuilding();
+            var lib = (b != null && b.library != null) ? b.library : PaletteState.Library;
+            PaletteOps.MarkBuildingsDirty(lib);
+            Repaint();
+        }
         void OnSelectionChange() => Repaint();
 
         static Building SelectedBuilding()
@@ -38,6 +46,7 @@ namespace LevelBuilder.Editor
                 if (b != null && picked != null) AssignLibrary(b, picked);
                 lib = picked;
             }
+            else if (lib != null && PaletteState.Library != lib) PaletteState.Library = lib;
 
             if (lib == null)
             {
@@ -82,6 +91,7 @@ namespace LevelBuilder.Editor
             Undo.RecordObject(b, "Asignar biblioteca");
             b.library = lib;
             EditorUtility.SetDirty(b);
+            b.MarkDirty();
         }
 
         Rect DrawGrid(MaterialLibrary lib, Material active)
@@ -90,9 +100,11 @@ namespace LevelBuilder.Editor
             var area = GUILayoutUtility.GetRect(0, 100000, 0, 100000, GUILayout.ExpandHeight(true));
             GUI.Box(area, GUIContent.none);
             float cell = thumb + 8f, label = 16f;
-            int cols = Mathf.Max(1, Mathf.FloorToInt((area.width - 4) / cell));
+            float viewW = area.width - 16f;
+            int cols = Mathf.Max(1, Mathf.FloorToInt((viewW - 4) / cell));
             int rows = Mathf.CeilToInt(entries.Count / (float)cols);
-            var view = new Rect(0, 0, area.width - 16, rows * (cell + label) + 4);
+            var view = new Rect(0, 0, viewW, rows * (cell + label) + 4);
+            var visibleRect = new Rect(scroll.x, scroll.y, viewW, area.height);
             scroll = GUI.BeginScrollView(area, scroll, view);
             for (int i = 0; i < entries.Count; i++)
             {
@@ -102,16 +114,25 @@ namespace LevelBuilder.Editor
                 var tr = new Rect(r.x + 2, r.y + 2, thumb, thumb);
                 bool isActive = e.material != null && e.material == active;
                 if (isActive) EditorGUI.DrawRect(new Rect(r.x - 1, r.y - 1, r.width + 2, r.height + 2), new Color(0.2f, 0.5f, 1f, 0.6f));
-                var tex = e.material != null ? AssetPreview.GetAssetPreview(e.material) : null;
+                var tex = (e.material != null && Event.current.type == EventType.Repaint && visibleRect.Overlaps(r))
+                    ? AssetPreview.GetAssetPreview(e.material) : null;
                 if (tex != null) GUI.DrawTexture(tr, tex, ScaleMode.ScaleToFit);
                 else EditorGUI.DrawRect(tr, new Color(0.3f, 0.3f, 0.3f));
                 GUI.Label(new Rect(r.x, r.y + thumb + 2, r.width, label), e.name, EditorStyles.miniLabel);
 
                 var ev = Event.current;
-                if (ev.type == EventType.MouseDown && r.Contains(ev.mousePosition))
+                if (visibleRect.Contains(ev.mousePosition) && r.Contains(ev.mousePosition))
                 {
-                    if (ev.button == 0) { PaletteState.Active = e.material; ev.Use(); }
-                    else if (ev.button == 1) { ShowContextMenu(lib, e); ev.Use(); }
+                    if (ev.type == EventType.MouseDown && ev.button == 0)
+                    {
+                        if (e.material != null) PaletteState.Active = e.material;
+                        ev.Use();
+                    }
+                    else if (ev.type == EventType.ContextClick)
+                    {
+                        ShowContextMenu(lib, e);
+                        ev.Use();
+                    }
                 }
             }
             GUI.EndScrollView();
@@ -127,13 +148,9 @@ namespace LevelBuilder.Editor
             menu.AddItem(new GUIContent("Categoría"), false, () =>
                 TextPrompt.Show("Categoría", e.category, v => Edit(lib, "Categoría de material", false, () => e.category = v)));
             menu.AddItem(new GUIContent("Tamaño real"), false, () =>
-                TextPrompt.Show("Tamaño (m): ancho,alto", e.size.x + "," + e.size.y, v =>
+                TextPrompt.Show("Tamaño (m): ancho x alto", PaletteOps.FormatSize(e.size), v =>
                 {
-                    var f = v.Split(',', ';', ' ').Where(s => s.Length > 0).Select(s =>
-                        float.TryParse(s, System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out var x) ? x : 0f).ToArray();
-                    if (f.Length == 0 || f[0] <= 0f) return;
-                    var sz = new Vector2(f[0], f.Length > 1 && f[1] > 0f ? f[1] : f[0]);
+                    if (!PaletteOps.TryParseSize(v, out var sz)) return;
                     Edit(lib, "Tamaño real de material", true, () => e.size = sz);
                 }));
             menu.AddItem(new GUIContent("Quitar de la biblioteca"), false, () =>
