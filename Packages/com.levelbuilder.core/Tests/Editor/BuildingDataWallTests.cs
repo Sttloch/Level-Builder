@@ -463,6 +463,47 @@ namespace LevelBuilder.Tests
         }
 
         [Test]
+        public void RemoveWall_DoorOnReversedLeftover_ToggledHingeAndKeepsPosition()
+        {
+            var west = b.AddSegment(f, new Vector2(4, 0), new Vector2(0, 0))[0];   // m -> a, gets reversed
+            b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0));
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            var o = new WallOpening { id = "d3", type = OpeningType.Door, center = 1f, width = 1f, height = 2f };
+            o.door.hingeOnRight = false;
+            b.AddOpening(f, west.id, o);
+            Assert.IsTrue(b.RemoveWall(f, div.id));
+            var (seg, o2) = b.FindOpening(f, "d3");
+            var a = f.GetNode(seg.startNodeId).position;
+            var e = f.GetNode(seg.endNodeId).position;
+            Assert.AreEqual(3f, (a + (e - a).normalized * o2.center).x, 0.001f);
+            Assert.IsTrue(o2.door.hingeOnRight);
+        }
+
+        [Test]
+        public void RemoveWall_DifferentThickness_DoesNotMerge()
+        {
+            var s1 = b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0))[0];
+            var s2 = b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0))[0];
+            s2.thickness = s1.thickness + 0.1f;
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            b.RemoveWall(f, div.id);
+            Assert.AreEqual(2, f.segments.Count);
+            Assert.AreEqual(3, f.nodes.Count);
+        }
+
+        [Test]
+        public void RemoveWall_DifferentHeightOverride_DoesNotMerge()
+        {
+            b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0));
+            var s2 = b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0))[0];
+            s2.heightOverride = 1f;
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            b.RemoveWall(f, div.id);
+            Assert.AreEqual(2, f.segments.Count);
+            Assert.AreEqual(3, f.nodes.Count);
+        }
+
+        [Test]
         public void RemoveWall_KeepsLinkedNodes()
         {
             BuildRoomWithDivider(f);
