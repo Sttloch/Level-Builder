@@ -28,6 +28,13 @@ namespace LevelBuilder.Tests
         [TestCase("Brick_Foo", MapKind.Unknown)]
         [TestCase("Brick-Metallic", MapKind.Metallic)]
         [TestCase("Brick_DISP", MapKind.Height)]
+        [TestCase("Brick_NormalGL", MapKind.Normal)]
+        [TestCase("Brick_nor_gl", MapKind.Normal)]
+        [TestCase("Brick-Nor-DX", MapKind.Normal)]
+        [TestCase("Brick_AmbientOcclusion", MapKind.Occlusion)]
+        [TestCase("Brick_Displacement", MapKind.Height)]
+        [TestCase("Brick_Diff", MapKind.Albedo)]
+        [TestCase("Ladrillo_Rojo", MapKind.Unknown)]
         public void Classify_RecognisesSuffixes(string name, MapKind expected)
         {
             Assert.AreEqual(expected, TextureMaterialFactory.Classify(name));
@@ -65,6 +72,53 @@ namespace LevelBuilder.Tests
             Assert.AreEqual(2, g["Brick"].Count);
             Assert.IsTrue(g["Brick"].ContainsKey(MapKind.Normal));
             Assert.IsTrue(g["Wood"].ContainsKey(MapKind.Albedo));
+        }
+
+        [Test]
+        public void BaseName_MultiPartSuffix()
+        {
+            Assert.AreEqual("Brick", TextureMaterialFactory.BaseName("Brick_nor_gl"));
+            Assert.AreEqual("Ladrillo_Rojo", TextureMaterialFactory.BaseName("Ladrillo_Rojo_Normal"));
+        }
+
+        [Test]
+        public void Group_UnknownSuffixIsAlbedoOfFullName()
+        {
+            AssetDatabase.CreateFolder("Assets", "__LBTexTests");
+            var g = TextureMaterialFactory.Group(new List<Texture2D>
+            {
+                MakeTexture(Root, "Ladrillo_Rojo"), MakeTexture(Root, "Ladrillo_Rojo_Normal"),
+                MakeTexture(Root, "Muro_2K"),
+                MakeTexture(Root, "Brick_Albedo"), MakeTexture(Root, "Brick_Foo"),
+            });
+            Assert.IsTrue(g["Ladrillo_Rojo"].ContainsKey(MapKind.Albedo));
+            Assert.IsTrue(g["Ladrillo_Rojo"].ContainsKey(MapKind.Normal));
+            Assert.IsTrue(g["Muro_2K"].ContainsKey(MapKind.Albedo));
+            Assert.AreEqual("Brick_Albedo", g["Brick"][MapKind.Albedo].name);
+            Assert.IsTrue(g.ContainsKey("Brick_Foo"));
+        }
+
+        [Test]
+        public void Group_AliasesAndCaseInsensitive()
+        {
+            AssetDatabase.CreateFolder("Assets", "__LBTexTests");
+            var g = TextureMaterialFactory.Group(new List<Texture2D>
+            {
+                MakeTexture(Root, "Rock_Diff"), MakeTexture(Root, "ROCK_nor_gl"), MakeTexture(Root, "rock_Displacement"),
+            });
+            Assert.AreEqual(1, g.Count);
+            var m = g["Rock"];
+            Assert.IsTrue(m.ContainsKey(MapKind.Albedo) && m.ContainsKey(MapKind.Normal) && m.ContainsKey(MapKind.Height));
+        }
+
+        [Test]
+        public void Create_DisablesSrgbOnDataMaps()
+        {
+            AssetDatabase.CreateFolder("Assets", "__LBTexTests");
+            var ao = MakeTexture(Root, "Brick_AO");
+            TextureMaterialFactory.Create("Brick", new Dictionary<MapKind, Texture2D> { { MapKind.Occlusion, ao } }, Root + "/M");
+            var imp = (TextureImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(ao));
+            Assert.IsFalse(imp.sRGBTexture);
         }
 
         [Test]

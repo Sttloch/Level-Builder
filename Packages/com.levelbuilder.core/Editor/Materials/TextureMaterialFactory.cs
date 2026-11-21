@@ -22,41 +22,70 @@ namespace LevelBuilder.Editor
             { "rough", MapKind.Roughness }, { "roughness", MapKind.Roughness },
             { "metal", MapKind.Metallic }, { "metallic", MapKind.Metallic },
             { "ao", MapKind.Occlusion }, { "occlusion", MapKind.Occlusion },
-            { "height", MapKind.Height }, { "disp", MapKind.Height },
+            { "height", MapKind.Height }, { "disp", MapKind.Height }, { "displacement", MapKind.Height },
+            { "diff", MapKind.Albedo }, { "ambientocclusion", MapKind.Occlusion },
+            { "normalgl", MapKind.Normal }, { "normaldx", MapKind.Normal },
+            // multi-part suffixes, written with '_' regardless of the separator used in the name
+            { "nor_gl", MapKind.Normal }, { "nor_dx", MapKind.Normal },
+            { "normal_gl", MapKind.Normal }, { "normal_dx", MapKind.Normal },
         };
 
         static int SepIndex(string name) => name == null ? -1 : Math.Max(name.LastIndexOf('_'), name.LastIndexOf('-'));
 
+        /// <summary>Finds a recognised suffix (one or two parts); returns the index of its separator, or -1.</summary>
+        static int SuffixStart(string name, out MapKind kind)
+        {
+            kind = MapKind.Unknown;
+            int i = SepIndex(name);
+            if (i < 0) return -1;
+            int j = i > 0 ? Math.Max(name.LastIndexOf('_', i - 1), name.LastIndexOf('-', i - 1)) : -1;
+            if (j >= 0)
+            {
+                var two = name.Substring(j + 1).Replace('-', '_');
+                if (Suffixes.TryGetValue(two, out kind)) return j;
+            }
+            if (Suffixes.TryGetValue(name.Substring(i + 1), out kind)) return i;
+            kind = MapKind.Unknown;
+            return -1;
+        }
+
         /// <summary>No separator = albedo; separator with unrecognised suffix = Unknown.</summary>
         public static MapKind Classify(string textureName)
         {
-            int i = SepIndex(textureName);
-            if (i < 0) return MapKind.Albedo;
-            return Suffixes.TryGetValue(textureName.Substring(i + 1), out var k) ? k : MapKind.Unknown;
+            if (SepIndex(textureName) < 0) return MapKind.Albedo;
+            SuffixStart(textureName, out var k);
+            return k;
         }
 
         /// <summary>Name without the recognised suffix; unchanged when there is none.</summary>
         public static string BaseName(string textureName)
         {
-            int i = SepIndex(textureName);
-            if (i < 0) return textureName;
-            return Suffixes.ContainsKey(textureName.Substring(i + 1)) ? textureName.Substring(0, i) : textureName;
+            int i = SuffixStart(textureName, out _);
+            return i < 0 ? textureName : textureName.Substring(0, i);
         }
 
-        /// <summary>Groups textures by base name; textures with an unknown suffix are ignored.</summary>
+        /// <summary>Groups textures by base name (case-insensitive). A texture with an unrecognised suffix is
+        /// treated as the albedo of its full name, unless that group already has an explicit albedo.</summary>
         public static Dictionary<string, Dictionary<MapKind, Texture2D>> Group(IEnumerable<Texture2D> textures)
         {
-            var result = new Dictionary<string, Dictionary<MapKind, Texture2D>>();
+            var result = new Dictionary<string, Dictionary<MapKind, Texture2D>>(StringComparer.OrdinalIgnoreCase);
             if (textures == null) return result;
+            var unknown = new List<Texture2D>();
             foreach (var t in textures)
             {
                 if (t == null) continue;
                 var kind = Classify(t.name);
-                if (kind == MapKind.Unknown) continue;
+                if (kind == MapKind.Unknown) { unknown.Add(t); continue; }
                 var key = BaseName(t.name);
                 if (!result.TryGetValue(key, out var maps))
                     result[key] = maps = new Dictionary<MapKind, Texture2D>();
                 if (!maps.ContainsKey(kind)) maps[kind] = t;
+            }
+            foreach (var t in unknown)
+            {
+                if (!result.TryGetValue(t.name, out var maps))
+                    result[t.name] = maps = new Dictionary<MapKind, Texture2D>();
+                if (!maps.ContainsKey(MapKind.Albedo)) maps[MapKind.Albedo] = t;
             }
             return result;
         }
@@ -107,20 +136,29 @@ namespace LevelBuilder.Editor
             EnsureFolder(folder);
             maps = maps ?? new Dictionary<MapKind, Texture2D>();
 
-            if (maps.TryGetValue(MapKind.Normal, out var n) && n != null)
+            foreach (var kv in maps)
             {
-                var path = AssetDatabase.GetAssetPath(n);
-                if (AssetImporter.GetAtPath(path) is TextureImporter imp && imp.textureType != TextureImporterType.NormalMap)
-                {
-                    imp.textureType = TextureImporterType.NormalMap;
-                    imp.SaveAndReimport();
-                }
+                if (kv.Value == null) continue;
+                var imp = AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(kv.Value)) as TextureImporter;
+                if (imp == null) continue;
+                bool changed = false;
+                if (kv.Key == MapKind.Normal && imp.textureType != TextureImporterType.NormalMap)
+                { imp.textureType = TextureImporterType.NormalMap; changed = true; }
+                else if ((kv.Key == MapKind.Roughness || kv.Key == MapKind.Metallic || kv.Key == MapKind.Occlusion || kv.Key == MapKind.Height)
+                         && imp.sRGBTexture)
+                { imp.sRGBTexture = false; changed = true; }
+                if (changed) imp.SaveAndReimport();
             }
 
-            var mat = new Material(PipelineLitShader()) { name = baseName };
+            var shader = PipelineLitShader();
+            if (DetectPipeline() != Pipeline.BuiltIn && shader.name == "Standard")
+                Debug.LogWarning("LevelBuilder: no se encontro el shader Lit del pipeline activo; se usa Standard.");
+            var mat = new Material(shader) { name = baseName };
             Texture2D Get(MapKind k) => maps.TryGetValue(k, out var t) ? t : null;
 
-            switch (DetectPipeline())
+            var sn = shader.name;
+            var family = sn.Contains("HDRP") ? Pipeline.Hdrp : sn.Contains("Universal") ? Pipeline.Urp : Pipeline.BuiltIn;
+            switch (family)
             {
                 case Pipeline.Hdrp:
                     Assign(mat, "_BaseColorMap", Get(MapKind.Albedo));
