@@ -140,9 +140,8 @@ namespace LevelBuilder.Geometry
             float ceiling = to.elevation - to.slabThickness;
             float sPos = 0f;
             int ci = 0;
-            // Per piece: centerline start, and for landings the corner vertex and reach (to rebuild them wider).
+            // Per piece: centerline start (for the hole extension strip).
             var starts = new List<float>();
-            var landingAt = new List<(int vi, float reach)>();
             for (int k = 0; k < n - 1; k++)
             {
                 while (ci < cornerIdx.Count && cl.cum[cornerIdx[ci]] <= sPos + Tol) ci++;
@@ -156,14 +155,12 @@ namespace LevelBuilder.Geometry
                     float e = reach[ci];
                     int vi = cornerIdx[ci++];
                     piece.kind = StairPieceKind.Landing;
-                    landingAt.Add((vi, e));
                     Landing(cl, vi, sPos, h, e, out left, out right);
                     sPos = cl.cum[vi] + e;
                 }
                 else
                 {
                     piece.kind = StairPieceKind.Tread;
-                    landingAt.Add((-1, 0f));
                     cl.Section(sPos + tread, h, out var l1, out var r1);
                     left = new List<Vector2> { piece.frontA, l1 };
                     right = new List<Vector2> { piece.frontB, r1 };
@@ -197,8 +194,9 @@ namespace LevelBuilder.Geometry
             // StepAllowance applies with the collision ramp too: a CharacterController lifts by its step offset on
             // every grounded move, and walking DOWN its leading side reaches the edge while it still stands uphill.
             float riser = r.riser;
-            float headroom = s.headroom > 0f && !float.IsInfinity(s.headroom) ? s.headroom : DefaultHeadroom;
-            float margin = s.holeMargin > 0f && !float.IsInfinity(s.holeMargin) ? s.holeMargin : 0f;
+            // Clamped like BuildingData.ClampStair (hand-edited data); NaN / non-positive headroom -> default.
+            float headroom = s.headroom > 0f ? Mathf.Clamp(s.headroom, 1.5f, 4.0f) : DefaultHeadroom;
+            float margin = s.holeMargin > 0f ? Mathf.Clamp(s.holeMargin, 0f, 1.0f) : 0f;
             float need = headroom + StepAllowance;
             int first = r.pieces.FindIndex(p => p.clearance - riser < need);
             if (first >= 0)
@@ -219,38 +217,16 @@ namespace LevelBuilder.Geometry
                     float room = free0 - need;
                     ext = room >= 0f ? tread * Mathf.Clamp01(1f - room / riser) : tread + CapsuleRadius;
                 }
-                // holeMargin widens every hole piece by margin per side and extends the hole margin further back.
-                float hw = h + margin;
+                // Base hole (margin 0): exact union of the needed pieces plus the extension strip at stair width.
                 var polys = new List<List<Vector2>>();
-                for (int k = first; k < r.pieces.Count; k++)
+                for (int k = first; k < r.pieces.Count; k++) polys.Add(r.pieces[k].polygon);
+                if (ext > Tol)
                 {
-                    if (margin <= 0f) { polys.Add(r.pieces[k].polygon); continue; }
-                    List<Vector2> wl, wr;
-                    if (landingAt[k].vi >= 0) Landing(cl, landingAt[k].vi, starts[k], hw, landingAt[k].reach, out wl, out wr);
-                    else
-                    {
-                        cl.Section(starts[k], hw, out var l0, out var r0);
-                        cl.Section(starts[k] + tread, hw, out var l1, out var r1);
-                        wl = new List<Vector2> { l0, l1 };
-                        wr = new List<Vector2> { r0, r1 };
-                    }
-                    polys.Add(Outline(wr, wl));
-                }
-                float backLen = ext + margin;
-                if (backLen > Tol)
-                {
-                    // Strip behind the first hole piece's front edge, following the centerline (straight before 0).
-                    float s1 = starts[first], s0 = s1 - backLen;
-                    int steps = Mathf.Clamp(Mathf.CeilToInt(backLen / 0.25f), 1, 1000);
-                    var bl = new List<Vector2>();
-                    var br = new List<Vector2>();
-                    for (int i = 0; i <= steps; i++)
-                    {
-                        cl.Section(Mathf.Lerp(s0, s1, (float)i / steps), hw, out var lp, out var rp);
-                        bl.Add(lp);
-                        br.Add(rp);
-                    }
-                    polys.Add(Outline(br, bl));
+                    // Strip behind the first piece's front edge (straight: the centerline extends before 0).
+                    float s1 = starts[first], s0 = s1 - ext;
+                    cl.Section(s0, h, out var l0, out var r0);
+                    cl.Section(s1, h, out var l1, out var r1);
+                    polys.Add(Outline(new List<Vector2> { r0, r1 }, new List<Vector2> { l0, l1 }));
                 }
                 r.hole = UnionOutline(polys);
                 if (r.hole == null)
@@ -259,10 +235,96 @@ namespace LevelBuilder.Geometry
                     foreach (var p in polys) all.AddRange(p);
                     r.hole = ConvexHull(all);
                 }
+                // holeMargin: outward offset of that single outline (back and sides), except along the arrival
+                // zone's boundary (its near side is the top riser edge; on U-stairs a side can run beside a flight):
+                // the arrival must stay clear of the hole.
+                if (margin > 0f) r.hole = OffsetOutline(r.hole, margin, r.arrivalZone);
             }
 
             r.ok = true;
             return r;
+        }
+
+        /// <summary>
+        /// Outward offset of a CCW simple polygon by d, except edges lying on an edge of keep (offset 0).
+        /// Each vertex goes to the intersection of its two offset edge lines (miter); at convex vertices a miter
+        /// farther than 2*d from the vertex is bevelled (one point per edge). Falls back to the convex hull of the
+        /// offset points if the result is not simple.
+        /// </summary>
+        internal static List<Vector2> OffsetOutline(List<Vector2> poly, float d, List<Vector2> keep)
+        {
+            // Split the outline's edges at keep's vertices, so only the part of an edge along keep stays put.
+            if (keep != null)
+            {
+                var split = new List<Vector2>();
+                for (int i = 0; i < poly.Count; i++)
+                {
+                    var a = poly[i]; var b = poly[(i + 1) % poly.Count];
+                    split.Add(a);
+                    var ab = b - a;
+                    float len2 = ab.sqrMagnitude;
+                    if (len2 < 1e-12f) continue;
+                    var cuts = new List<float>();
+                    foreach (var k in keep)
+                    {
+                        float t = Vector2.Dot(k - a, ab) / len2;
+                        if (t > 1e-3f && t < 1f - 1e-3f && (a + ab * t - k).sqrMagnitude < SnapTol * SnapTol) cuts.Add(t);
+                    }
+                    cuts.Sort();
+                    foreach (var t in cuts) split.Add(a + ab * t);
+                }
+                poly = split;
+            }
+            int n = poly.Count;
+            var dist = new float[n]; // edge i = poly[i] -> poly[i + 1]
+            for (int i = 0; i < n; i++)
+            {
+                dist[i] = d;
+                if (keep == null) continue;
+                for (int j = 0; j < keep.Count; j++)
+                {
+                    var ka = keep[j]; var kb = keep[(j + 1) % keep.Count];
+                    if (OnSegment(ka, kb, poly[i]) && OnSegment(ka, kb, poly[(i + 1) % n])) { dist[i] = 0f; break; }
+                }
+            }
+            var res = new List<Vector2>();
+            for (int i = 0; i < n; i++)
+            {
+                var v = poly[i];
+                float d1 = dist[(i + n - 1) % n], d2 = dist[i];
+                var e1 = (v - poly[(i + n - 1) % n]).normalized;
+                var e2 = (poly[(i + 1) % n] - v).normalized;
+                var n1 = new Vector2(e1.y, -e1.x);
+                var n2 = new Vector2(e2.y, -e2.x);
+                float det = Cross(n1, n2);
+                if (Mathf.Abs(det) < 1e-4f)
+                {
+                    // (Nearly) collinear edges: a step when the offsets differ.
+                    AddUnique(res, v + n1 * d1);
+                    AddUnique(res, v + n2 * d2);
+                    continue;
+                }
+                // x with dot(x, n1) = d1 and dot(x, n2) = d2.
+                var x = new Vector2((d1 * n2.y - d2 * n1.y) / det, (n1.x * d2 - n2.x * d1) / det);
+                bool reflex = Cross(e1, e2) < 0f;
+                if (reflex || x.magnitude <= 2f * d + Tol) AddUnique(res, v + x);
+                else
+                {
+                    AddUnique(res, v + n1 * d1);
+                    AddUnique(res, v + n2 * d2);
+                }
+            }
+            while (res.Count > 1 && (res[0] - res[res.Count - 1]).sqrMagnitude < Tol * Tol) res.RemoveAt(res.Count - 1);
+            return res.Count >= 3 && IsSimple(res) ? res : ConvexHull(res);
+        }
+
+        static bool OnSegment(Vector2 a, Vector2 b, Vector2 p)
+        {
+            var ab = b - a;
+            float len2 = ab.sqrMagnitude;
+            if (len2 < 1e-12f) return false;
+            float t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / len2);
+            return (a + ab * t - p).sqrMagnitude < SnapTol * SnapTol;
         }
 
         /// <summary>True when two non-adjacent pieces overlap deeper than the validator's touch tolerance.</summary>

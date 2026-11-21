@@ -366,4 +366,20 @@ public class StairValidatorTests
         s.holeMargin = 0.4f;
         CollectionAssert.AreEqual(Issues(StairIssue.HoleCrossesWall), StairValidator.Validate(b, s).issues);
     }
+
+    [Test] public void HoleMargin_UStair_IsValid()
+    {
+        // 16x12 building; U-stair with touching flights, margin 0.2.
+        var b = new BuildingData();
+        var f0 = b.AddFloor();
+        b.AddSegment(f0, new Vector2(0, 0), new Vector2(16, 0));
+        b.AddSegment(f0, new Vector2(16, 0), new Vector2(16, 12));
+        b.AddSegment(f0, new Vector2(16, 12), new Vector2(0, 12));
+        b.AddSegment(f0, new Vector2(0, 12), new Vector2(0, 0));
+        b.AddFloor();
+        var s = Stair(b, P(6, 3), P(6, 7), P(7, 7), P(7, 3));
+        s.holeMargin = 0.2f;
+        var v = StairValidator.Validate(b, s);
+        Assert.IsTrue(v.Valid, string.Join(",", v.issues));
+    }
 }

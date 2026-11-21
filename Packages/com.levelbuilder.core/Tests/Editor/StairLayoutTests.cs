@@ -455,7 +455,7 @@ public class StairLayoutTests
         var a = Compute(s0, 3.3f);
         var c = Compute(s1, 3.3f);
         Assert.AreEqual(MinY(a.hole) - 0.4f, MinY(c.hole), 1e-3f);
-        Assert.AreEqual(MaxY(a.hole), MaxY(c.hole), 1e-3f);
+        Assert.AreEqual(MaxY(a.hole), MaxY(c.hole), 1e-3f);  // the top edge is not offset (arrival zone)
         Assert.AreEqual(MinX(a.hole) - 0.4f, MinX(c.hole), 1e-3f);
         Assert.AreEqual(MaxX(a.hole) + 0.4f, MaxX(c.hole), 1e-3f);
         Assert.Greater(Triangulator.SignedArea(c.hole), Triangulator.SignedArea(a.hole) + 0.4f * 1.2f);
@@ -477,7 +477,11 @@ public class StairLayoutTests
         Assert.AreEqual(0f, s.holeMargin);
     }
 
-    [Test] public void OldData_DefaultsKeepCurrentHole([Values(3.0f, 3.3f)] float height)
+    // Expected hole fronts under the previous rule (clearance - riser < 2.55): 3.0 m -> piece 0 (y 0),
+    // 3.3 m -> piece 1 (y 0.28).
+    [TestCase(3.0f, 0f)]
+    [TestCase(3.3f, 0.28f)]
+    public void OldData_DefaultsKeepCurrentHole(float height, float expectedMinY)
     {
         // Stairs serialized before headroom/holeMargin existed deserialize with the defaults.
         var old = JsonUtility.FromJson<StairData>("{\"id\":\"a\",\"width\":1.2,\"riserTarget\":0.18,\"tread\":0.28}");
@@ -485,12 +489,54 @@ public class StairLayoutTests
         Assert.AreEqual(0f, old.holeMargin);
         old.route = new List<StairPoint> { P(0, 0), P(0, 10) };
         var r = Compute(old, height);
-        // Previous rule: first piece with clearance - riser < 2.1 + 0.15 + 0.3, hole front at its front edge.
-        int first = r.pieces.FindIndex(p => p.clearance - r.riser < 2.55f);
-        Assert.GreaterOrEqual(first, 0);
-        Assert.AreEqual(r.pieces[first].frontA.y, MinY(r.hole), Eps);
+        Assert.AreEqual(expectedMinY, MinY(r.hole), Eps);
         Assert.AreEqual(-0.6f, MinX(r.hole), Eps);
         Assert.AreEqual(0.6f, MaxX(r.hole), Eps);
+    }
+
+    [Test] public void Extension_ShortfallAboveFloor_IsPartialRunIn()
+    {
+        // 2.9 m: 16 risers of 0.18125, ceiling 2.7. Free height at the bottom edge 2.7 - 0.18125 < 2.55, but at
+        // floor level 2.7 >= 2.55: room = 0.15, ext = tread * (1 - room / riser).
+        var r = Compute(Stair(P(0, 0), P(0, 10)), 2.9f);
+        Assert.AreEqual(16, r.risers);
+        float room = 2.7f - 2.55f;
+        float ext = 0.28f * (1f - room / r.riser);
+        Assert.Greater(ext, 0.02f);
+        Assert.AreEqual(-ext, MinY(r.hole), 0.01f);
+    }
+
+    [Test] public void HoleMargin_UStairTouchingFlights_IsOffsetNotHull()
+    {
+        var s = Stair(P(0, 0), P(0, 4), P(1, 4), P(1, 0));
+        s.holeMargin = 0.2f;
+        var r = Compute(s);
+        Assert.IsTrue(r.ok, r.error);
+        Assert.IsTrue(IsSimplePolygon(r.hole), "hole is simple");
+        AssertHoleCoversNeeded(r);
+        Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.arrivalZone), r.hole));
+        var pts = new List<Vector2>(r.hole);
+        foreach (var p in r.pieces) pts.AddRange(p.polygon);
+        Assert.Less(Triangulator.SignedArea(r.hole), Triangulator.SignedArea(Hull(pts)) - 0.1f);
+    }
+
+    static List<Vector2> Hull(List<Vector2> pts)
+    {
+        var p = new List<Vector2>(pts);
+        p.Sort((u, v) => u.x != v.x ? u.x.CompareTo(v.x) : u.y.CompareTo(v.y));
+        var h = new List<Vector2>();
+        for (int pass = 0; pass < 2; pass++)
+        {
+            int st = h.Count;
+            for (int i = 0; i < p.Count; i++)
+            {
+                var q = pass == 0 ? p[i] : p[p.Count - 1 - i];
+                while (h.Count >= st + 2 && Cr(h[h.Count - 1] - h[h.Count - 2], q - h[h.Count - 2]) <= 0f) h.RemoveAt(h.Count - 1);
+                h.Add(q);
+            }
+            h.RemoveAt(h.Count - 1);
+        }
+        return h;
     }
 
     [Test] public void LowFloor_HoleExtendsBeforeTheStair()
