@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace LevelBuilder.Editor
@@ -6,6 +7,24 @@ namespace LevelBuilder.Editor
     /// generated meshes that carry a <see cref="FaceKeyMap"/>.</summary>
     public static class FacePicker
     {
+        // Generated meshes are never modified after creation (a regeneration creates new Mesh instances), so the
+        // CPU copy of vertices/triangles is cached per Mesh instance; entries of destroyed meshes are dropped.
+        class Cached { public Vector3[] verts; public int[][] tris; }
+        static readonly Dictionary<Mesh, Cached> cache = new Dictionary<Mesh, Cached>();
+        static readonly List<Mesh> dead = new List<Mesh>();
+
+        static Cached Get(Mesh mesh)
+        {
+            if (cache.TryGetValue(mesh, out var c)) return c;
+            dead.Clear();
+            foreach (var k in cache.Keys) if (k == null) dead.Add(k);
+            foreach (var k in dead) cache.Remove(k);
+            c = new Cached { verts = mesh.vertices, tris = new int[mesh.subMeshCount][] };
+            for (int i = 0; i < c.tris.Length; i++) c.tris[i] = mesh.GetTriangles(i);
+            cache[mesh] = c;
+            return c;
+        }
+
         public static bool Pick(Building b, Ray worldRay, out string faceKey, out FloorData floor, out Vector3 hitPoint)
         {
             faceKey = null; floor = null; hitPoint = default;
@@ -28,21 +47,25 @@ namespace LevelBuilder.Editor
                     var mesh = mf.sharedMesh;
                     var tr = map.transform;
                     var o = tr.InverseTransformPoint(worldRay.origin);
-                    var d = tr.InverseTransformDirection(worldRay.direction); // unnormalized on purpose: t stays valid in world units
-                    var verts = mesh.vertices;
-                    for (int sm = 0; sm < mesh.subMeshCount; sm++)
+                    var d = tr.InverseTransformVector(worldRay.direction); // not normalized: o + d*t is the same point for any scale
+                    if (!BoundsHit(mesh.bounds, o, d)) continue;
+                    var cm = Get(mesh);
+                    var verts = cm.verts;
+                    for (int sm = 0; sm < cm.tris.Length; sm++)
                     {
-                        var tris = mesh.GetTriangles(sm);
+                        var tris = cm.tris[sm];
                         for (int t = 0; t + 2 < tris.Length; t += 3)
                         {
-                            if (!RayTriangle(o, d, verts[tris[t]], verts[tris[t + 1]], verts[tris[t + 2]], out float dist)) continue;
+                            if (!RayTriangle(o, d, verts[tris[t]], verts[tris[t + 1]], verts[tris[t + 2]], out float lt)) continue;
+                            var wp = tr.TransformPoint(o + d * lt);
+                            float dist = (wp - worldRay.origin).magnitude; // world distance, comparable across objects
                             if (dist >= best) continue;
                             var key = map.KeyAt(sm, t / 3);
                             if (key == null) continue;
                             best = dist;
                             faceKey = key;
                             floor = b.data.floors[index];
-                            hitPoint = tr.TransformPoint(o + d * dist);
+                            hitPoint = wp;
                         }
                     }
                 }
@@ -50,7 +73,23 @@ namespace LevelBuilder.Editor
             return faceKey != null;
         }
 
-        // Moller-Trumbore, double sided; dist is in units of the (local) direction vector.
+        // Slab test of the local ray against the mesh bounds (a ray starting inside counts as a hit).
+        static bool BoundsHit(Bounds bb, Vector3 o, Vector3 d)
+        {
+            float tmin = 0f, tmax = float.MaxValue;
+            for (int i = 0; i < 3; i++)
+            {
+                float lo = bb.min[i], hi = bb.max[i];
+                if (Mathf.Abs(d[i]) < 1e-12f) { if (o[i] < lo || o[i] > hi) return false; continue; }
+                float t1 = (lo - o[i]) / d[i], t2 = (hi - o[i]) / d[i];
+                if (t1 > t2) { var tmp = t1; t1 = t2; t2 = tmp; }
+                tmin = Mathf.Max(tmin, t1); tmax = Mathf.Min(tmax, t2);
+                if (tmin > tmax) return false;
+            }
+            return true;
+        }
+
+        // Moller-Trumbore, double sided; t is in units of the (local) direction vector.
         static bool RayTriangle(Vector3 o, Vector3 d, Vector3 v0, Vector3 v1, Vector3 v2, out float t)
         {
             t = 0f;

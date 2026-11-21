@@ -88,4 +88,38 @@ public class FacePickerTests
         Assert.AreSame(f0, floor);
         Assert.Less(hitLow.y, hitAll.y - 1f);
     }
+
+    [Test] public void Pick_InactiveFloorRoot_IsIgnored()
+    {
+        var f0 = Room(b.data.AddFloor(), 0, 4);
+        Room(b.data.AddFloor(), 0, 4);
+        r.Regenerate();
+        go.transform.Find("Floor 1").gameObject.SetActive(false);
+        Assert.IsTrue(FacePicker.Pick(b, new Ray(new Vector3(2, 30, 2), Vector3.down), out _, out var floor, out _));
+        Assert.AreSame(f0, floor);
+    }
+
+    [Test] public void Pick_RotatedNonUniformScale_StillCorrect()
+    {
+        var f = Room(b.data.AddFloor(), 0, 4);
+        var s = SegFrom(f, Vector2.zero);
+        r.Regenerate();
+        go.transform.SetPositionAndRotation(new Vector3(3, 1, -2), Quaternion.Euler(0, 30, 0));
+        go.transform.localScale = new Vector3(2f, 1f, 0.5f);
+        var t = go.transform;
+        // Aim from inside the room (local 2,1,2) through the south wall (local z = 0) and the opposite north wall.
+        var o = t.TransformPoint(new Vector3(2, 1, 2));
+        var dir = (t.TransformPoint(new Vector3(2, 1, 0)) - o).normalized;
+        Assert.IsTrue(FacePicker.Pick(b, new Ray(o, dir), out var key, out var floor, out var hit));
+        Assert.AreEqual(s.id + "/L", key);
+        Assert.AreSame(f, floor);
+        var local = t.InverseTransformPoint(hit);
+        Assert.AreEqual(0f, local.z, 0.2f);
+        // Nearest wins: from outside south, the near (south) wall is hit, not the north one.
+        var o2 = t.TransformPoint(new Vector3(2, 1, -5));
+        var dir2 = (t.TransformPoint(new Vector3(2, 1, 8)) - o2).normalized;
+        Assert.IsTrue(FacePicker.Pick(b, new Ray(o2, dir2), out key, out _, out hit));
+        Assert.AreEqual(s.id + "/R", key);
+        Assert.AreEqual(0f, t.InverseTransformPoint(hit).z, 0.2f);
+    }
 }
