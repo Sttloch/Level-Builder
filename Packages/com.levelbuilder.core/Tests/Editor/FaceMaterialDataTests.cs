@@ -60,12 +60,13 @@ public class FaceMaterialDataTests
         var c = b.AddSegment(f, new Vector2(4, 0), new Vector2(2, 0))[0];
         var t = b.AddSegment(f, new Vector2(2, 0), new Vector2(2, 2))[0];
         a.materials.left = m1;
+        a.materials.right = m2;
         c.materials.right = m1; // same physical side as a.left once c is reversed
         c.materials.left = m2;
         b.RemoveWall(f, t.id);
         Assert.AreEqual(1, f.segments.Count);
         Assert.AreSame(m1, f.segments[0].materials.left);
-        Assert.IsNull(f.segments[0].materials.right);
+        Assert.AreSame(m2, f.segments[0].materials.right);
         // Direct check on the reversed segment's swap.
         Assert.AreSame(m1, c.materials.left);
         Assert.AreSame(m2, c.materials.right);

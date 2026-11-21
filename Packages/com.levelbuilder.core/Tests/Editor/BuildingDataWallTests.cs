@@ -410,6 +410,55 @@ namespace LevelBuilder.Tests
             Assert.AreEqual(1, PlanarFaces.Compute(f).regions.Count);
         }
 
+        Material Mat() => new Material(Shader.Find("Hidden/Internal-Colored"));
+
+        WallSegment[] TwoHalves()
+        {
+            var west = b.AddSegment(f, new Vector2(0, 0), new Vector2(4, 0))[0];
+            var east = b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0))[0];
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            return new[] { west, east, div };
+        }
+
+        [Test]
+        public void RemoveWall_HalvesPaintedDifferently_DoNotMerge()
+        {
+            var h = TwoHalves();
+            var m = Mat();
+            h[0].materials = new WallFaceMaterials { left = m };
+            Assert.IsTrue(b.RemoveWall(f, h[2].id));
+            Assert.AreEqual(2, f.segments.Count);
+            Assert.AreEqual(3, f.nodes.Count);
+            Object.DestroyImmediate(m);
+        }
+
+        [Test]
+        public void RemoveWall_HalvesPaintedAlike_Merge()
+        {
+            var h = TwoHalves();
+            var m = Mat();
+            h[0].materials = new WallFaceMaterials { left = m };
+            h[1].materials = new WallFaceMaterials { left = m };
+            Assert.IsTrue(b.RemoveWall(f, h[2].id));
+            Assert.AreEqual(1, f.segments.Count);
+            Assert.AreSame(m, f.segments[0].materials.left);
+            Object.DestroyImmediate(m);
+        }
+
+        [Test]
+        public void RemoveWall_OppositelyOrientedHalvesPaintedAlikePhysically_Merge()
+        {
+            var west = b.AddSegment(f, new Vector2(4, 0), new Vector2(0, 0))[0];   // reversed relative to east
+            var east = b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0))[0];
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            var m = Mat();
+            west.materials = new WallFaceMaterials { right = m };   // west->(0,0) right side faces north...
+            east.materials = new WallFaceMaterials { left = m };    // ...east's left side faces north
+            Assert.IsTrue(b.RemoveWall(f, div.id));
+            Assert.AreEqual(1, f.segments.Count);
+            Object.DestroyImmediate(m);
+        }
+
         [Test]
         public void RemoveWall_ReturnsFalseForMissingSegment()
         {

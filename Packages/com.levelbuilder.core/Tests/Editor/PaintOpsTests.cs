@@ -120,4 +120,28 @@ public class PaintOpsTests
         Assert.AreEqual("Descansillo", FaceNames.Of("stair:s/landing"));
         Assert.AreEqual("Barandilla", FaceNames.Of("stair:s/rail"));
     }
+
+    [Test] public void PaintFace_NodeTop_PaintsTopOfEveryIncidentSegment()
+    {
+        var f = Room();
+        string nodeId = f.segments[0].startNodeId;
+        PaintOps.PaintFace(b, f, "node:" + nodeId + "/top", m, Vector3.zero);
+        foreach (var s in f.segments)
+        {
+            bool incident = s.startNodeId == nodeId || s.endNodeId == nodeId;
+            if (incident) Assert.AreSame(m, s.materials.top);
+            else Assert.IsNull(s.materials?.top);
+        }
+    }
+
+    [Test] public void PaintFace_NodeSide_IsNoOpWithoutUndoStep()
+    {
+        var f = Room();
+        string nodeId = f.segments[0].startNodeId;
+        Undo.IncrementCurrentGroup();
+        int group = Undo.GetCurrentGroup();
+        PaintOps.PaintFace(b, f, "node:" + nodeId + "/side", m, Vector3.zero);
+        Assert.AreEqual(group, Undo.GetCurrentGroup());
+        foreach (var s in f.segments) Assert.IsNull(s.materials?.top);
+    }
 }

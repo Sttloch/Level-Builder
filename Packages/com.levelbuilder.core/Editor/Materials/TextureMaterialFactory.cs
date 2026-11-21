@@ -151,7 +151,7 @@ namespace LevelBuilder.Editor
             }
 
             var shader = PipelineLitShader();
-            if (DetectPipeline() != Pipeline.BuiltIn && shader.name == "Standard")
+            if (DetectPipeline() != Pipeline.BuiltIn && shader != null && shader.name == "Standard")
                 Debug.LogWarning("LevelBuilder: no se encontro el shader Lit del pipeline activo; se usa Standard.");
             var mat = new Material(shader) { name = baseName };
             Texture2D Get(MapKind k) => maps.TryGetValue(k, out var t) ? t : null;

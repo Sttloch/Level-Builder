@@ -23,6 +23,8 @@ namespace LevelBuilder.Editor
             PaletteOps.MarkAllBuildingsDirty();
             Repaint();
         }
+        bool dropHint;
+
         void OnSelectionChange() => Repaint();
 
         static Building SelectedBuilding()
@@ -46,9 +48,21 @@ namespace LevelBuilder.Editor
             }
             else if (lib != null && PaletteState.Library != lib) PaletteState.Library = lib;
 
+            if (lib != null) dropHint = false;
             if (lib == null)
             {
                 EditorGUILayout.HelpBox("No hay biblioteca de materiales.", MessageType.Info);
+                if (dropHint)
+                    EditorGUILayout.HelpBox("Crea o elige una biblioteca para añadir materiales", MessageType.Warning);
+                var dropEv = Event.current;
+                if ((dropEv.type == EventType.DragUpdated || dropEv.type == EventType.DragPerform)
+                    && DragAndDrop.objectReferences.Any(o => o is Material || o is Texture2D))
+                {
+                    DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
+                    if (dropEv.type == EventType.DragPerform)
+                        dropHint = true;
+                    dropEv.Use();
+                }
                 if (GUILayout.Button("Crear biblioteca por defecto"))
                 {
                     var created = DefaultLibrary.CreateOrGet();

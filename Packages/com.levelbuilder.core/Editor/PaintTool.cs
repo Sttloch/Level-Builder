@@ -29,6 +29,9 @@ namespace LevelBuilder.Editor
         static void Paint(Building b, FloorData f, IList<string> keys, Material m, Vector3 hit)
         {
             if (b == null || b.data == null || f == null || keys.Count == 0) return;
+            bool any = false;
+            foreach (var k in keys) if (FaceMaterialRules.IsWritable(f, k)) { any = true; break; }
+            if (!any) return;
             var data = b.data;
             int fi = data.floors.IndexOf(f);
             var local = b.transform.InverseTransformPoint(hit);
@@ -169,6 +172,7 @@ namespace LevelBuilder.Editor
                     view.Repaint();
                     break;
                 case EventType.MouseDown:
+                    if (!e.alt) altPress = false;
                     if (e.button == 0 && !e.alt && HandleUtility.nearestControl == id)
                     {
                         GUIUtility.hotControl = id;
@@ -238,7 +242,11 @@ namespace LevelBuilder.Editor
                     break;
                 case EventType.ValidateCommand:
                 case EventType.ExecuteCommand:
-                    if ((e.commandName == "SoftDelete" || e.commandName == "Delete") && swallowDeleteCommand) e.Use();
+                    if ((e.commandName == "SoftDelete" || e.commandName == "Delete") && swallowDeleteCommand)
+                    {
+                        e.Use();
+                        if (e.type == EventType.ExecuteCommand) swallowDeleteCommand = false;
+                    }
                     break;
             }
         }
@@ -293,10 +301,12 @@ namespace LevelBuilder.Editor
                 }
             }
             if (Lines.Count == 0) return;
+            var prevColor = Handles.color;
             Handles.color = HoverColor;
             Handles.zTest = UnityEngine.Rendering.CompareFunction.LessEqual;
             Handles.DrawLines(Lines.ToArray());
             Handles.zTest = UnityEngine.Rendering.CompareFunction.Always;
+            Handles.color = prevColor;
         }
     }
 }

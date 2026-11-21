@@ -574,10 +574,23 @@ namespace LevelBuilder
             if (!Mathf.Approximately(first.thickness, second.thickness)
                 || !Mathf.Approximately(first.Height(f), second.Height(f))) return;
             if (Vector2.Angle(pa.position - m.position, m.position - pb.position) >= 0.5f) return;
+            // Merging would drop one half's paint: only merge when both halves are painted alike (same orientation).
+            if (!SamePaint(first, second, first.startNodeId == nodeId, second.endNodeId == nodeId)) return;
             // JoinSplit needs first.end == m and second.start == m.
             if (first.startNodeId == nodeId) ReverseSegment(f, first);
             if (second.endNodeId == nodeId) ReverseSegment(f, second);
             JoinSplit(f, first.id, second.id);
+        }
+
+        static bool SamePaint(WallSegment a, WallSegment b, bool reverseA, bool reverseB)
+        {
+            Material Side(WallSegment s, bool rev, bool left) =>
+                s.materials == null ? null : (left ^ rev) ? s.materials.left : s.materials.right;
+            Material Caps(WallSegment s) => s.materials?.caps;
+            Material Top(WallSegment s) => s.materials?.top;
+            return Side(a, reverseA, true) == Side(b, reverseB, true)
+                && Side(a, reverseA, false) == Side(b, reverseB, false)
+                && Caps(a) == Caps(b) && Top(a) == Top(b);
         }
 
         bool IsLinkedAnywhere(string nodeId)

@@ -15,3 +15,4 @@ Abre una escena con un Building que tenga al menos dos plantas, varias habitacio
 11. **Material borrado**: borra un material usado del proyecto: esas caras vuelven al material por defecto sin errores en la consola.
 12. **Undo**: cada clic de pintura es un único paso de Ctrl+Z ("Pintar"), también Shift+clic.
 13. **Pipelines**: repite los pasos 1, 2 y 5 en Built-in y, si puedes, en URP y HDRP.
+14. **Casos límite de la pintura**: "+ Planta" copia la pintura de las paredes, pero no la de suelos ni techos. Una habitación que se vuelve a cerrar alrededor de un punto de pintura antiguo recupera esa pintura. Quitar una pared entre dos mitades pintadas distinto no las fusiona (se conserva el nodo); pintadas igual, sí se fusionan.

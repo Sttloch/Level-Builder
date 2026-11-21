@@ -70,7 +70,7 @@ namespace LevelBuilder
 
         /// <summary>Stores m in the field the key maps to. For region keys the paint is anchored at regionSeed
         /// (default: an interior point of the region); an existing paint of that region is updated instead.
-        /// Node keys are derived from their segments and are ignored.</summary>
+        /// node:X/top writes the top of every incident segment; node:X/side is ignored.</summary>
         public static void Set(BuildingData d, FloorData f, string faceKey, Material m, Vector2? regionSeed = null) =>
             Set(d, f, faceKey, m, null, regionSeed);
 
@@ -100,7 +100,19 @@ namespace LevelBuilder
                 return;
             }
             if (!SplitLast(faceKey, out var id, out var part)) return;
-            if (faceKey.StartsWith(NodePrefix, StringComparison.Ordinal)) return;
+            if (faceKey.StartsWith(NodePrefix, StringComparison.Ordinal))
+            {
+                // A node cap shows the top material of its segments: paint the top of every incident segment.
+                if (part != "top") return;
+                string nodeId = id.Substring(NodePrefix.Length);
+                foreach (var s in f.segments)
+                {
+                    if (s.startNodeId != nodeId && s.endNodeId != nodeId) continue;
+                    if (s.materials == null) s.materials = new WallFaceMaterials();
+                    s.materials.top = m;
+                }
+                return;
+            }
             if (faceKey.StartsWith(StairPrefix, StringComparison.Ordinal))
             {
                 var st = d.FindStair(id.Substring(StairPrefix.Length));
@@ -120,6 +132,16 @@ namespace LevelBuilder
             if (seg == null) return;
             if (seg.materials == null) seg.materials = new WallFaceMaterials();
             WallField(seg.materials, part, m, true);
+        }
+
+        /// <summary>False when Set(faceKey) can never change anything (node side faces, nodes without segments).</summary>
+        public static bool IsWritable(FloorData f, string faceKey)
+        {
+            if (f == null || string.IsNullOrEmpty(faceKey)) return false;
+            if (!faceKey.StartsWith(NodePrefix, StringComparison.Ordinal)) return true;
+            if (!SplitLast(faceKey, out var id, out var part) || part != "top") return false;
+            string nodeId = id.Substring(NodePrefix.Length);
+            return f.segments.Exists(s => s.startNodeId == nodeId || s.endNodeId == nodeId);
         }
 
         /// <summary>Every face key of the piece the face belongs to (wall, region slab, opening, stair).
