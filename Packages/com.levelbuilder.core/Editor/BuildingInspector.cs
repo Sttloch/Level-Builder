@@ -98,6 +98,13 @@ namespace LevelBuilder.Editor
                 float t = EditorGUILayout.DelayedFloatField("Grosor de pared", seg.thickness);
                 if (EditorGUI.EndChangeCheck())
                     BuildingEditorUtil.Mutate(b, "Grosor de pared", selIndex, () => seg.thickness = Mathf.Max(0.01f, t));
+                if (GUILayout.Button("Quitar pared"))
+                {
+                    string segId = seg.id;
+                    BuildingEditorUtil.Mutate(b, "Quitar pared", selIndex, () => data.RemoveWall(selFloor, segId));
+                    WallSelection.Clear();
+                    GUIUtility.ExitGUI();
+                }
             }
             else if (node != null)
             {

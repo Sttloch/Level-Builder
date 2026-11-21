@@ -541,6 +541,58 @@ namespace LevelBuilder
             RemoveIfOrphan(f, s.endNodeId);
         }
 
+        /// <summary>Removes a wall and then merges, at each end node that is left with exactly two collinear
+        /// segments (under 0.5 degrees) and no floor links, those two into one (openings keep their position).
+        /// Returns false if the segment does not exist.</summary>
+        public bool RemoveWall(FloorData f, string segmentId)
+        {
+            var s = f.GetSegment(segmentId);
+            if (s == null) return false;
+            string n1 = s.startNodeId, n2 = s.endNodeId;
+            RemoveSegment(f, segmentId);
+            TryMergeAt(f, n1);
+            TryMergeAt(f, n2);
+            return true;
+        }
+
+        void TryMergeAt(FloorData f, string nodeId)
+        {
+            var m = f.GetNode(nodeId);
+            if (m == null || IsLinkedAnywhere(nodeId)) return;
+            var inc = f.segments.FindAll(x => x.startNodeId == nodeId || x.endNodeId == nodeId);
+            if (inc.Count != 2) return;
+            var first = inc[0];
+            var second = inc[1];
+            var pa = f.GetNode(first.startNodeId == nodeId ? first.endNodeId : first.startNodeId);
+            var pb = f.GetNode(second.startNodeId == nodeId ? second.endNodeId : second.startNodeId);
+            if (pa == null || pb == null || pa == pb) return;
+            if (Vector2.Angle(pa.position - m.position, m.position - pb.position) >= 0.5f) return;
+            // JoinSplit needs first.end == m and second.start == m.
+            if (first.startNodeId == nodeId) ReverseSegment(f, first);
+            if (second.endNodeId == nodeId) ReverseSegment(f, second);
+            JoinSplit(f, first.id, second.id);
+        }
+
+        bool IsLinkedAnywhere(string nodeId)
+        {
+            foreach (var fl in floors)
+                foreach (var n in fl.nodes)
+                    if (n.id == nodeId ? !string.IsNullOrEmpty(n.linkedBelowId) : n.linkedBelowId == nodeId) return true;
+            return false;
+        }
+
+        /// <summary>Swaps start/end and mirrors the openings so they stay in the same place (door hinges keep their physical side).</summary>
+        void ReverseSegment(FloorData f, WallSegment s)
+        {
+            float len = Length(f, s);
+            (s.startNodeId, s.endNodeId) = (s.endNodeId, s.startNodeId);
+            foreach (var o in s.openings)
+            {
+                o.center = len - o.center;
+                if (o.type == OpeningType.Door && o.door != null) o.door.hingeOnRight = !o.door.hingeOnRight;
+            }
+        }
+
         public void RemoveNode(FloorData f, string nodeId)
         {
             var incident = f.segments.FindAll(s => s.startNodeId == nodeId || s.endNodeId == nodeId);

@@ -278,7 +278,7 @@ namespace LevelBuilder.Editor
             if (node != null)
                 BuildingEditorUtil.Mutate(b, "Eliminar nodo", fi, () => data.RemoveNode(f, node.id));
             else
-                BuildingEditorUtil.Mutate(b, "Eliminar pared", fi, () => data.RemoveSegment(f, seg.id));
+                BuildingEditorUtil.Mutate(b, "Quitar pared", fi, () => data.RemoveWall(f, seg.id));
             WallSelection.Clear();
             session.Finish();
             return true;

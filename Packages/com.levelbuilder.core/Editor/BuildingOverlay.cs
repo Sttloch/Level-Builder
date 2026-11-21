@@ -62,8 +62,9 @@ namespace LevelBuilder.Editor
                         "Clic: punto. Doble clic / Esc / Enter: terminar. Retroceso: quitar último punto.\n" +
                         "Clic en nodo: seleccionar; otro clic en el nodo seleccionado: empezar pared desde él.\n" +
                         "Arrastrar nodo: mover (al soltar se une a nodos / divide paredes).\n" +
-                        "Doble clic en pared: dividir. Shift+clic: seleccionar pared.\n" +
-                        "Ctrl: sin rejilla. Shift: ángulos de 15°. Supr: borrar selección.", MessageType.None);
+                        "Doble clic en pared: dividir.\n" +
+                        "Shift+clic: seleccionar pared · Supr o 'Quitar pared': quitarla (une las habitaciones).\n" +
+                        "Ctrl: sin rejilla. Shift: ángulos de 15°.", MessageType.None);
 
                 DrawOpeningRow();
                 DrawStairRow(b);

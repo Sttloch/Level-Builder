@@ -388,6 +388,96 @@ namespace LevelBuilder.Tests
             }
         }
 
+        void BuildRoomWithDivider(FloorData fl)
+        {
+            b.AddSegment(fl, new Vector2(0, 0), new Vector2(8, 0));
+            b.AddSegment(fl, new Vector2(8, 0), new Vector2(8, 6));
+            b.AddSegment(fl, new Vector2(8, 6), new Vector2(0, 6));
+            b.AddSegment(fl, new Vector2(0, 6), new Vector2(0, 0));
+            b.AddSegment(fl, new Vector2(4, 0), new Vector2(4, 6));
+        }
+
+        WallSegment DividerOf(FloorData fl) => fl.segments.First(s =>
+            Mathf.Approximately(fl.GetNode(s.startNodeId).position.x, 4f) &&
+            Mathf.Approximately(fl.GetNode(s.endNodeId).position.x, 4f));
+
+        [Test]
+        public void RemoveWall_MergesTwoRoomsIntoOneRegion()
+        {
+            BuildRoomWithDivider(f);
+            Assert.AreEqual(2, PlanarFaces.Compute(f).regions.Count);
+            Assert.IsTrue(b.RemoveWall(f, DividerOf(f).id));
+            Assert.AreEqual(1, PlanarFaces.Compute(f).regions.Count);
+        }
+
+        [Test]
+        public void RemoveWall_ReturnsFalseForMissingSegment()
+        {
+            Assert.IsFalse(b.RemoveWall(f, "nope"));
+        }
+
+        [Test]
+        public void RemoveWall_JoinsCollinearLeftovers()
+        {
+            BuildRoomWithDivider(f);
+            b.RemoveWall(f, DividerOf(f).id);
+            Assert.AreEqual(4, f.segments.Count);
+            Assert.AreEqual(4, f.nodes.Count);
+            Assert.IsFalse(f.nodes.Any(n => (n.position - new Vector2(4, 0)).magnitude < 0.01f));
+            Assert.IsFalse(f.nodes.Any(n => (n.position - new Vector2(4, 6)).magnitude < 0.01f));
+        }
+
+        [Test]
+        public void RemoveWall_KeepsOpeningsOnJoinedWall()
+        {
+            BuildRoomWithDivider(f);
+            var east = f.segments.First(s => f.GetNode(s.startNodeId).position == new Vector2(4, 0)
+                                             && f.GetNode(s.endNodeId).position == new Vector2(8, 0));
+            var door = new WallOpening { id = "d1", type = OpeningType.Door, center = 2f, width = 1f, height = 2f };
+            b.AddOpening(f, east.id, door);
+            b.RemoveWall(f, DividerOf(f).id);
+            var (seg, o) = b.FindOpening(f, "d1");
+            Assert.IsNotNull(seg);
+            var a = f.GetNode(seg.startNodeId).position;
+            var e = f.GetNode(seg.endNodeId).position;
+            var abs = a + (e - a).normalized * o.center;
+            Assert.AreEqual(6f, abs.x, 0.001f);
+            Assert.AreEqual(0f, abs.y, 0.001f);
+        }
+
+        [Test]
+        public void RemoveWall_KeepsOpeningsWhenLeftoversAreOppositelyOriented()
+        {
+            b.AddSegment(f, new Vector2(4, 0), new Vector2(0, 0));   // m -> a
+            b.AddSegment(f, new Vector2(4, 0), new Vector2(8, 0));   // m -> b
+            var div = b.AddSegment(f, new Vector2(4, 0), new Vector2(4, 5))[0];
+            var east = f.segments.First(s => f.GetNode(s.endNodeId).position == new Vector2(8, 0));
+            b.AddOpening(f, east.id, new WallOpening { id = "d2", type = OpeningType.Window, center = 1f, width = 1f, height = 1f, sill = 1f });
+            Assert.IsTrue(b.RemoveWall(f, div.id));
+            Assert.AreEqual(1, f.segments.Count);
+            var (seg, o) = b.FindOpening(f, "d2");
+            var a = f.GetNode(seg.startNodeId).position;
+            var e = f.GetNode(seg.endNodeId).position;
+            var abs = a + (e - a).normalized * o.center;
+            Assert.AreEqual(5f, abs.x, 0.001f);
+        }
+
+        [Test]
+        public void RemoveWall_KeepsLinkedNodes()
+        {
+            BuildRoomWithDivider(f);
+            var upper = new FloorData { id = "upper", name = "Up" };
+            b.floors.Add(upper);
+            var below = f.nodes.First(n => (n.position - new Vector2(4, 0)).magnitude < 0.01f);
+            var up = new WallNode { id = "up1", position = new Vector2(4, 0), linkedBelowId = below.id };
+            upper.nodes.Add(up);
+            b.RemoveWall(f, DividerOf(f).id);
+            Assert.IsNotNull(f.GetNode(below.id));
+            Assert.AreEqual(2, f.segments.Count(s => s.startNodeId == below.id || s.endNodeId == below.id));
+            // the unlinked far end still joins
+            Assert.IsFalse(f.nodes.Any(n => (n.position - new Vector2(4, 6)).magnitude < 0.01f));
+        }
+
         List<(FloorData floor, string original, string added)> Record()
         {
             var list = new List<(FloorData floor, string original, string added)>();
