@@ -77,8 +77,8 @@ namespace LevelBuilder.Editor
         }
 
         public static string FormatSize(Vector2 s) =>
-            s.x.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + " x " +
-            s.y.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            Mathf.Max(s.x, 0.0001f).ToString("0.####", System.Globalization.CultureInfo.InvariantCulture) + " x " +
+            Mathf.Max(s.y, 0.0001f).ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
 
         public static List<string> Categories(MaterialLibrary lib)
         {
@@ -94,6 +94,17 @@ namespace LevelBuilder.Editor
             foreach (var b in Resources.FindObjectsOfTypeAll<Building>())
             {
                 if (b == null || b.library != lib) continue;
+                if (EditorUtility.IsPersistent(b) || !b.gameObject.scene.IsValid()) continue;
+                b.MarkDirty(-1);
+            }
+        }
+
+        /// <summary>Marks every scene Building with a library dirty (used after undo/redo, which may touch any library).</summary>
+        public static void MarkAllBuildingsDirty()
+        {
+            foreach (var b in Resources.FindObjectsOfTypeAll<Building>())
+            {
+                if (b == null || b.library == null) continue;
                 if (EditorUtility.IsPersistent(b) || !b.gameObject.scene.IsValid()) continue;
                 b.MarkDirty(-1);
             }

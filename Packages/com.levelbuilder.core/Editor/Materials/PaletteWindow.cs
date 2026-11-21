@@ -20,9 +20,7 @@ namespace LevelBuilder.Editor
 
         void OnUndoRedo()
         {
-            var b = SelectedBuilding();
-            var lib = (b != null && b.library != null) ? b.library : PaletteState.Library;
-            PaletteOps.MarkBuildingsDirty(lib);
+            PaletteOps.MarkAllBuildingsDirty();
             Repaint();
         }
         void OnSelectionChange() => Repaint();

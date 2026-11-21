@@ -73,11 +73,24 @@ namespace LevelBuilder.Tests
         [TestCase("1,5 × 3", 1.5f, 3f)]
         [TestCase("2;4", 2f, 4f)]
         [TestCase("3", 3f, 3f)]
+        [TestCase("1,5", 1.5f, 1.5f)]
+        [TestCase("0,5;0,5", 0.5f, 0.5f)]
         public void TryParseSize_Valid(string text, float x, float y)
         {
             Assert.IsTrue(PaletteOps.TryParseSize(text, out var s));
             Assert.AreEqual(x, s.x, 1e-5f);
             Assert.AreEqual(y, s.y, 1e-5f);
+        }
+
+        [Test]
+        public void FormatSize_RoundTrips()
+        {
+            foreach (var v in new[] { new Vector2(0.5f, 2.25f), new Vector2(0.00001f, 3f), new Vector2(1.2345f, 1f) })
+            {
+                Assert.IsTrue(PaletteOps.TryParseSize(PaletteOps.FormatSize(v), out var r), PaletteOps.FormatSize(v));
+                Assert.AreEqual(Mathf.Max(v.x, 0.0001f), r.x, 1e-4f);
+                Assert.AreEqual(Mathf.Max(v.y, 0.0001f), r.y, 1e-4f);
+            }
         }
 
         [TestCase("")] [TestCase("abc")] [TestCase("0 x 1")] [TestCase("-1 x 2")] [TestCase("1x2x3")]
