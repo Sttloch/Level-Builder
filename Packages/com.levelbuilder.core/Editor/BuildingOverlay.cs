@@ -66,6 +66,8 @@ namespace LevelBuilder.Editor
                         "Shift+clic: seleccionar pared · Supr o 'Quitar pared': quitarla (une las habitaciones).\n" +
                         "Ctrl: sin rejilla. Shift: ángulos de 15°.", MessageType.None);
 
+                if (GUILayout.Button("Paleta")) PaletteWindow.Open();
+
                 DrawOpeningRow();
                 DrawStairRow(b);
             }
