@@ -141,14 +141,26 @@ namespace LevelBuilder.Editor
                 session.Click(cursor); // first point / repeated point: no data change, no Undo entry
         }
 
+        WallSnap.Kind snapKind;
+
         bool TryCursor(Building b, FloorData f, Event e, out Vector2 p)
         {
             if (!BuildingEditorUtil.GuiToPlan(b, e.mousePosition, f.elevation, out p)) return false;
+            snapKind = WallSnap.Kind.None;
+            bool grid = !(e.control || e.command);
             // Existing nodes win over the grid (also with Ctrl) so chains can start/close on off-grid nodes.
-            if (NearNode(b, f, e.mousePosition, out var node)) p = node.position;
-            else if (!(e.control || e.command)) p = GridSnap.Snap(p, Grid);
-            if (e.shift && session.IsDrawing)
-                p = GridSnap.SnapAngle(session.LastPoint.Value, p, AngleStep);
+            if (NearNode(b, f, e.mousePosition, out var node)) { p = node.position; snapKind = WallSnap.Kind.Node; }
+            else if (e.shift && session.IsDrawing)
+            {
+                // Angle first, then only the node magnet.
+                p = GridSnap.SnapAngle(session.LastPoint.Value, grid ? GridSnap.Snap(p, Grid) : p, AngleStep);
+                if (grid)
+                {
+                    var q = WallSnap.Snap(f, p, 0f, out var k, out _);
+                    if (k == WallSnap.Kind.Node) { p = q; snapKind = k; }
+                }
+            }
+            else if (grid) p = WallSnap.Snap(f, p, Grid, out snapKind, out _);
             return true;
         }
 
@@ -328,7 +340,7 @@ namespace LevelBuilder.Editor
                     if ((mouse - pressMouse).magnitude > DragPixels) pressDragged = true;
                     if (pressDragged && BuildingEditorUtil.GuiToPlan(b, mouse, f.elevation, out var p))
                     {
-                        if (!(e.control || e.command)) p = GridSnap.Snap(p, Grid);
+                        if (!(e.control || e.command)) p = WallSnap.Snap(f, p, Grid, out _, out _, n.id);
                         if ((p - n.position).sqrMagnitude > 1e-8f)
                             BuildingEditorUtil.Mutate(b, "Mover nodo", isLinked ? -1 : fi, () => data.MoveNode(f, n.id, p));
                     }
@@ -363,6 +375,14 @@ namespace LevelBuilder.Editor
             bool closing = session.WouldClose(cursor);
             Handles.color = closing ? SelectedColor : PreviewColor;
             Handles.DrawSolidDisc(c, b.transform.up, size);
+            if (snapKind == WallSnap.Kind.Node)
+                Handles.DrawWireDisc(c, b.transform.up, size * 2.2f);
+            else if (snapKind == WallSnap.Kind.Wall)
+            {
+                var r = b.transform.right * size * 1.6f;
+                var u = b.transform.forward * size * 1.6f;
+                Handles.DrawAAPolyLine(2f, c - r - u, c + r - u, c + r + u, c - r + u, c - r - u);
+            }
             if (!session.IsDrawing) return;
             var last = session.LastPoint.Value;
             var a = BuildingEditorUtil.PlanToWorld(b, last, f.elevation);
