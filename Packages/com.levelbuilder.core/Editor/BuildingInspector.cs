@@ -98,6 +98,19 @@ namespace LevelBuilder.Editor
                 float t = EditorGUILayout.DelayedFloatField("Grosor de pared", seg.thickness);
                 if (EditorGUI.EndChangeCheck())
                     BuildingEditorUtil.Mutate(b, "Grosor de pared", selIndex, () => seg.thickness = Mathf.Max(0.01f, t));
+                EditorGUI.BeginChangeCheck();
+                float wh = EditorGUILayout.DelayedFloatField("Altura", seg.Height(selFloor));
+                if (EditorGUI.EndChangeCheck() && !float.IsNaN(wh))
+                {
+                    string hSegId = seg.id;
+                    float fh = selFloor.height;
+                    BuildingEditorUtil.Mutate(b, "Altura de pared", selIndex, () =>
+                    {
+                        var s2 = selFloor.GetSegment(hSegId);
+                        if (s2 != null) WallTool.ApplyHeight(s2, WallTool.SnapHeight(wh, fh, true), fh);
+                    });
+                }
+                EditorGUILayout.HelpBox("0 = borde sin pared (pasarela/balcón)", MessageType.None);
                 if (GUILayout.Button("Quitar pared"))
                 {
                     string segId = seg.id;

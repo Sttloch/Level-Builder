@@ -56,6 +56,7 @@ namespace LevelBuilder.Editor
             Undo.undoRedoPerformed -= OnUndoRedo;
             session = null;
             pressedNodeId = null;
+            heightUndoGroup = -1;
         }
 
         void OnUndoRedo()
@@ -63,6 +64,7 @@ namespace LevelBuilder.Editor
             // Undo/Redo may deserialize new data instances: drop the session; it is rebuilt from the building.
             session = null;
             pressedNodeId = null;
+            heightUndoGroup = -1;
             SceneView.RepaintAll();
         }
 
@@ -90,6 +92,8 @@ namespace LevelBuilder.Editor
 
             DrawSegments(b, f);
             if (!session.IsDrawing) DoNodeHandles(b, data, f, fi, e);
+
+            DoHeightHandle(b, data, f, fi, e);
 
             HandleKeys(b, data, f, fi, e);
 
@@ -298,6 +302,76 @@ namespace LevelBuilder.Editor
                     BuildingEditorUtil.PlanToWorld(b, na.position, f.elevation),
                     BuildingEditorUtil.PlanToWorld(b, nb.position, f.elevation));
             }
+        }
+
+        public const float HeightStep = 0.1f;
+        int heightUndoGroup = -1;
+
+        /// <summary>Wall height snapped to 10 cm (unless free) and clamped to [0, floorHeight].</summary>
+        public static float SnapHeight(float h, float floorHeight, bool free)
+        {
+            if (!free) h = Mathf.Round(h / HeightStep) * HeightStep;
+            return Mathf.Clamp(h, 0f, Mathf.Max(0f, floorHeight));
+        }
+
+        /// <summary>Sets the segment height; a full-height value is stored as -1 (follows the floor height).</summary>
+        public static void ApplyHeight(WallSegment seg, float h, float floorHeight)
+        {
+            seg.heightOverride = h >= floorHeight - WallSegment.HeightTol ? -1f : Mathf.Max(0f, h);
+        }
+
+        void DoHeightHandle(Building b, BuildingData data, FloorData f, int fi, Event e)
+        {
+            var seg = WallSelection.Floor(b) == f ? WallSelection.Segment(b) : null;
+            if (seg == null || session.IsDrawing) { FinishHeightUndo(); return; }
+            var na = f.GetNode(seg.startNodeId);
+            var nb = f.GetNode(seg.endNodeId);
+            if (na == null || nb == null) return;
+
+            string segId = seg.id;
+            float h = seg.Height(f);
+            var up = b.transform.up;
+            var basePoint = BuildingEditorUtil.PlanToWorld(b, (na.position + nb.position) * 0.5f, f.elevation);
+            var top = basePoint + up * h;
+            float size = HandleUtility.GetHandleSize(top) * 0.08f;
+
+            Handles.color = SelectedColor;
+            EditorGUI.BeginChangeCheck();
+            var moved = Handles.Slider(top, up, size, Handles.DotHandleCap, 0f);
+            if (EditorGUI.EndChangeCheck())
+            {
+                float nh = SnapHeight(Vector3.Dot(moved - basePoint, up), f.height, e.control || e.command);
+                if (Mathf.Abs(nh - h) > 1e-5f)
+                {
+                    if (heightUndoGroup < 0)
+                    {
+                        Undo.IncrementCurrentGroup();
+                        Undo.SetCurrentGroupName("Altura de pared");
+                        heightUndoGroup = Undo.GetCurrentGroup();
+                    }
+                    BuildingEditorUtil.Mutate(b, "Altura de pared", fi, () =>
+                    {
+                        var s = b.data.floors[fi].GetSegment(segId);
+                        if (s != null) ApplyHeight(s, nh, b.data.floors[fi].height);
+                    });
+                    h = nh;
+                }
+            }
+            if (e.rawType == EventType.MouseUp && GUIUtility.hotControl == 0) FinishHeightUndo();
+
+            if (e.type == EventType.Repaint)
+            {
+                float shown = seg.Height(f);
+                Handles.Label(top + up * size * 2f,
+                    shown <= WallSegment.HeightTol ? "Borde sin pared" : shown.ToString("0.00") + " m");
+            }
+        }
+
+        void FinishHeightUndo()
+        {
+            if (heightUndoGroup < 0 || GUIUtility.hotControl != 0) return;
+            Undo.CollapseUndoOperations(heightUndoGroup);
+            heightUndoGroup = -1;
         }
 
         void DoNodeHandles(Building b, BuildingData data, FloorData f, int fi, Event e)
