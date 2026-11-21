@@ -184,11 +184,12 @@ public class StairLayoutTests
     static float Cr(Vector2 a, Vector2 b) => a.x * b.y - a.y * b.x;
 
     /// <summary>
-    /// A piece is in the hole when the free height above the NEXT step up lacks headroom plus the capsule
-    /// allowance (clearance is measured on the piece itself).
+    /// A piece is in the hole when the free height above the NEXT step up lacks headroom plus the capsule and
+    /// step allowances (clearance is measured on the piece itself).
     /// </summary>
-    static bool NeedsHole(StairLayoutResult r, StairPiece p) =>
-        p.clearance - r.riser < StairLayout.Headroom + StairLayout.CapsuleAllowance;
+    static bool NeedsHole(StairLayoutResult r, StairPiece p) => p.clearance - r.riser < Need;
+
+    const float Need = StairLayout.Headroom + StairLayout.CapsuleAllowance + StairLayout.StepAllowance;
 
     static void AssertHoleCoversNeeded(StairLayoutResult r)
     {
@@ -261,10 +262,10 @@ public class StairLayoutTests
 
     [Test] public void Hole_CoversPiecesWithLowClearance()
     {
-        var r = Compute(Stair(P(0, 0), P(0, 10)));
+        var r = Compute(Stair(P(0, 0), P(0, 10)), 3.3f);
         Assert.IsNotNull(r.hole);
         Assert.Greater(Triangulator.SignedArea(r.hole), 0f);
-        Assert.AreEqual(2.8f - 3f / 17f, r.pieces[0].clearance, 1e-3f);
+        Assert.AreEqual(3.1f - 3.3f / 18f, r.pieces[0].clearance, 1e-3f);
         Assert.IsFalse(PlanarFaces.PointInPolygon(Centroid(r.pieces[0].polygon), r.hole));
         int inHole = 0;
         foreach (var p in r.pieces)
@@ -278,11 +279,10 @@ public class StairLayoutTests
 
     [Test] public void LowerFloorHeight_GrowsHole()
     {
-        // With H = 2.6 the stair itself is shorter (14 risers, 13 pieces), so the absolute hole area
-        // (3.36 m²) is smaller than at 3.0 m (3.64 m²). What grows is the share of the stair that needs
+        // A lower floor makes the stair itself shorter, so what grows is the share of the stair that needs
         // the hole: it starts at an earlier piece and covers a larger fraction of the run.
-        var a = Compute(Stair(P(0, 0), P(0, 10)), 3f);
-        var b = Compute(Stair(P(0, 0), P(0, 10)), 2.6f);
+        var a = Compute(Stair(P(0, 0), P(0, 10)), 3.3f);
+        var b = Compute(Stair(P(0, 0), P(0, 10)), 3f);
         Assert.IsNotNull(a.hole); Assert.IsNotNull(b.hole);
         int fa = a.pieces.FindIndex(p => NeedsHole(a, p));
         int fb = b.pieces.FindIndex(p => NeedsHole(b, p));
@@ -384,10 +384,11 @@ public class StairLayoutTests
         Assert.IsTrue(Compute(Turn(150f, false, 3f)).ok);
     }
 
-    [Test] public void Hole_EdgeLeavesCapsuleHeadroom([Values(2.7f, 3.0f, 3.3f)] float height)
+    [Test] public void Hole_EdgeLeavesCapsuleHeadroom([Values(3.0f, 3.3f)] float height)
     {
         // The slab edge sits on the front edge of the first piece in the hole, where the walking surface is at that
-        // piece's height: the free height there must be at least Headroom + CapsuleAllowance (2.25 m).
+        // piece's height: the free height there must be at least Headroom + CapsuleAllowance + StepAllowance
+        // (2.55 m). At 2.7 m the hole spans the whole stair and still falls short (unsupported, see StairWalkTests).
         var r = Compute(Stair(P(0, 0), P(0, 10)), height);
         Assert.IsTrue(r.ok, r.error);
         Assert.IsNotNull(r.hole);
@@ -398,9 +399,9 @@ public class StairLayoutTests
         Assert.GreaterOrEqual(first, 0);
         for (int k = first; k < r.pieces.Count; k++)
             Assert.IsTrue(PlanarFaces.PointInPolygon(Centroid(r.pieces[k].polygon), r.hole), "piece " + k + " in hole");
-        Assert.GreaterOrEqual(ceiling - r.pieces[first].height, StairLayout.Headroom + StairLayout.CapsuleAllowance - 1e-4f);
+        Assert.GreaterOrEqual(ceiling - r.pieces[first].height, Need - 1e-4f);
         // ... and the hole starts no earlier than needed.
-        Assert.Less(ceiling - (r.pieces[first].height + r.riser), StairLayout.Headroom + StairLayout.CapsuleAllowance);
+        if (first > 0) Assert.Less(ceiling - (r.pieces[first].height + r.riser), Need + 1e-4f);
         // Hole front edge = first riser edge of that piece.
         Assert.AreEqual(r.pieces[first].frontA.y, MinY(r.hole), Eps);
     }
@@ -416,7 +417,9 @@ public class StairLayoutTests
         Assert.IsTrue(Compute(spiral).ok, Compute(spiral).error);
     }
 
-    [Test] public void Hole_RampOff_AddsStepAllowance()
+    // A CharacterController lifts by its step offset on every grounded move: climbing the steps (ramp off) or
+    // walking down the ramp toward the hole edge (ramp on). Both get the same hole.
+    [Test] public void Hole_RampOnOrOff_BothIncludeStepAllowance()
     {
         var on = Stair(P(0, 0), P(0, 10));
         var off = Stair(P(0, 0), P(0, 10));
@@ -426,7 +429,7 @@ public class StairLayoutTests
         float ceiling = 3.3f - 0.2f;
         int fa = a.pieces.FindIndex(p => PlanarFaces.PointInPolygon(Centroid(p.polygon), a.hole));
         int fc = c.pieces.FindIndex(p => PlanarFaces.PointInPolygon(Centroid(p.polygon), c.hole));
-        Assert.Less(fc, fa);
+        Assert.AreEqual(fa, fc);
         Assert.GreaterOrEqual(ceiling - c.pieces[fc].height,
             StairLayout.Headroom + StairLayout.CapsuleAllowance + StairLayout.StepAllowance - 1e-4f);
     }

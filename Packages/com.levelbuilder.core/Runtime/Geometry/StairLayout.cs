@@ -49,8 +49,8 @@ namespace LevelBuilder.Geometry
         /// </summary>
         public const float CapsuleAllowance = 0.15f;
         /// <summary>
-        /// Extra free height over the hole edge when the steps themselves are the walking surface (no collision
-        /// ramp): a CharacterController climbs a step by first moving up by its step offset (0.3 by default).
+        /// Extra free height over the hole edge for a CharacterController's step offset (0.3 by default): it first
+        /// moves up by it on every grounded move, climbing the steps or walking down the collision ramp.
         /// </summary>
         public const float StepAllowance = 0.3f;
         public const float CornerAngle = 30f;
@@ -184,9 +184,10 @@ namespace LevelBuilder.Geometry
             // CapsuleAllowance: the slab edge sits on the piece's front edge, where the walking surface (ramp
             // through the nosings) is already at the piece's height, so the previous piece, left out, guarantees
             // that much free height under the edge.
-            // Without the collision ramp the character climbs the steps themselves and needs StepAllowance more.
+            // StepAllowance applies with the collision ramp too: a CharacterController lifts by its step offset on
+            // every grounded move, and walking DOWN its leading side reaches the edge while it still stands uphill.
             float riser = r.riser;
-            float need = Headroom + CapsuleAllowance + (s.collisionRamp ? 0f : StepAllowance);
+            float need = Headroom + CapsuleAllowance + StepAllowance;
             int first = r.pieces.FindIndex(p => p.clearance - riser < need);
             if (first >= 0)
             {
