@@ -13,6 +13,7 @@ namespace LevelBuilder
         public float slabThickness = 0.2f;
         public List<WallNode> nodes = new List<WallNode>();
         public List<WallSegment> segments = new List<WallSegment>();
+        public List<RegionPaint> regionPaints = new List<RegionPaint>();
 
         public WallNode GetNode(string id) => nodes.Find(n => n.id == id);
         public WallSegment GetSegment(string id) => segments.Find(s => s.id == id);

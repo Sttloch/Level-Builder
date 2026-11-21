@@ -63,7 +63,7 @@ namespace LevelBuilder.Geometry
         }
 
         /// <summary>A point strictly inside the region (outside its holes): centroid of a triangle of it.</summary>
-        static bool InteriorPoint(Region r, out Vector2 p)
+        internal static bool InteriorPoint(Region r, out Vector2 p)
         {
             p = default;
             var holes = new List<IList<Vector2>>();

@@ -10,6 +10,7 @@ namespace LevelBuilder
     {
         public BuildingData data = new BuildingData();
         public int activeFloor;
+        public MaterialLibrary library;
 
         public event Action Changed;
 

@@ -13,6 +13,7 @@ namespace LevelBuilder
         /// <summary>Less than 0 means use the floor height.</summary>
         public float heightOverride = -1f;
         public List<WallOpening> openings = new List<WallOpening>();
+        public WallFaceMaterials materials = new WallFaceMaterials();
 
         /// <summary>Shared height tolerance: walls at most this tall are wall-less edges; walls lower than floor height minus this are low.</summary>
         public const float HeightTol = 0.01f;

@@ -153,7 +153,8 @@ namespace LevelBuilder
                     startNodeId = Clone(s.startNodeId).id,
                     endNodeId = Clone(s.endNodeId).id,
                     thickness = s.thickness,
-                    heightOverride = s.heightOverride
+                    heightOverride = s.heightOverride,
+                    materials = s.materials != null ? s.materials.Clone() : new WallFaceMaterials()
                 };
                 foreach (var o in s.openings)
                     if (o.type == OpeningType.Window) copy.openings.Add(o.Clone());
@@ -262,7 +263,8 @@ namespace LevelBuilder
                 startNodeId = node.id,
                 endNodeId = s.endNodeId,
                 thickness = s.thickness,
-                heightOverride = s.heightOverride
+                heightOverride = s.heightOverride,
+                materials = s.materials != null ? s.materials.Clone() : new WallFaceMaterials()
             };
             s.endNodeId = node.id;
             float splitLen = (node.position - a.position).magnitude;
@@ -586,11 +588,13 @@ namespace LevelBuilder
             return false;
         }
 
-        /// <summary>Swaps start/end and mirrors the openings so they stay in the same place (door hinges keep their physical side).</summary>
+        /// <summary>Swaps start/end and mirrors the openings so they stay in the same place (door hinges keep their physical side).
+        /// Left/right materials swap so they stay on the same physical side.</summary>
         void ReverseSegment(FloorData f, WallSegment s)
         {
             float len = Length(f, s);
             (s.startNodeId, s.endNodeId) = (s.endNodeId, s.startNodeId);
+            s.materials?.SwapSides();
             foreach (var o in s.openings)
             {
                 o.center = len - o.center;

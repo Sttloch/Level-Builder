@@ -33,5 +33,6 @@ namespace LevelBuilder
         public float headroom = 2.25f;
         /// <summary>Extra metres the hole extends toward the stair start and widens on each side. Range 0–1.</summary>
         public float holeMargin = 0f;
+        public StairFaceMaterials materials = new StairFaceMaterials();
     }
 }

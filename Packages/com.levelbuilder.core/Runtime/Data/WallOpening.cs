@@ -53,6 +53,7 @@ namespace LevelBuilder
         public float sill;
         public DoorSettings door = new DoorSettings();
         public GameObject windowPrefab;
+        public OpeningFaceMaterials materials = new OpeningFaceMaterials();
 
         /// <summary>Copy with a new id; UnityEvents are copied empty.</summary>
         public WallOpening Clone() => new WallOpening
@@ -64,7 +65,8 @@ namespace LevelBuilder
             height = height,
             sill = sill,
             door = door != null ? door.Clone() : new DoorSettings(),
-            windowPrefab = windowPrefab
+            windowPrefab = windowPrefab,
+            materials = materials != null ? materials.Clone() : new OpeningFaceMaterials()
         };
     }
 }

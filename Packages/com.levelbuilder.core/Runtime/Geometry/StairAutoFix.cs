@@ -82,7 +82,8 @@ namespace LevelBuilder.Geometry
             id = s.id, fromFloorId = s.fromFloorId, toFloorId = s.toFloorId, route = route,
             width = s.width, riserTarget = s.riserTarget, tread = s.tread,
             railLeft = s.railLeft, railRight = s.railRight, collisionRamp = s.collisionRamp,
-            headroom = s.headroom, holeMargin = s.holeMargin
+            headroom = s.headroom, holeMargin = s.holeMargin,
+            materials = s.materials != null ? s.materials.Clone() : new StairFaceMaterials()
         };
 
         static Vector2 Rot(Vector2 v, float sign) => sign > 0f ? new Vector2(-v.y, v.x) : new Vector2(v.y, -v.x);
