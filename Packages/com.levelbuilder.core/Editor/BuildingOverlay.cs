@@ -66,11 +66,33 @@ namespace LevelBuilder.Editor
                         "Shift+clic: seleccionar pared · Supr o 'Quitar pared': quitarla (une las habitaciones).\n" +
                         "Ctrl: sin rejilla. Shift: ángulos de 15°.", MessageType.None);
 
-                if (GUILayout.Button("Paleta")) PaletteWindow.Open();
+                DrawPaintRow();
 
                 DrawOpeningRow();
                 DrawStairRow(b);
             }
+        }
+
+        static void DrawPaintRow()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                bool active = ToolManager.activeToolType == typeof(PaintTool);
+                bool want = GUILayout.Toggle(active, "Pintar", "Button");
+                if (want != active)
+                {
+                    if (want) ToolManager.SetActiveTool<PaintTool>();
+                    else ToolManager.RestorePreviousPersistentTool();
+                }
+                if (GUILayout.Button("Paleta")) PaletteWindow.Open();
+            }
+            EditorGUI.BeginChangeCheck();
+            var m = (Material)EditorGUILayout.ObjectField("Material activo", PaletteState.Active, typeof(Material), false);
+            if (EditorGUI.EndChangeCheck()) PaletteState.Active = m;
+            if (ToolManager.activeToolType != typeof(PaintTool)) return;
+            EditorGUILayout.HelpBox(PaletteState.Active == null ? "Elige un material en la Paleta." :
+                "Clic: pintar una cara. Shift+clic: la pieza entera.\n" +
+                "Alt+clic: cuentagotas (toma el material). Esc: salir.", MessageType.None);
         }
 
         static void DrawStairRow(Building b)

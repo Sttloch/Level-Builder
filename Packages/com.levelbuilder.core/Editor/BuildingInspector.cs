@@ -48,6 +48,17 @@ namespace LevelBuilder.Editor
             if (b.data == null) return;
             var data = b.data;
 
+            EditorGUI.BeginChangeCheck();
+            var lib = (MaterialLibrary)EditorGUILayout.ObjectField("Biblioteca", b.library, typeof(MaterialLibrary), false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                Undo.RecordObject(b, "Biblioteca");
+                b.library = lib;
+                b.MarkDirty();
+                EditorUtility.SetDirty(b);
+            }
+            EditorGUILayout.Space();
+
             EditorGUILayout.LabelField("Plantas", EditorStyles.boldLabel);
             int active = BuildingEditorUtil.ActiveFloorIndex(b);
             for (int i = 0; i < data.floors.Count; i++)
@@ -111,6 +122,9 @@ namespace LevelBuilder.Editor
                     });
                 }
                 EditorGUILayout.HelpBox("0 = borde sin pared (pasarela/balcón)", MessageType.None);
+                MaterialFields(b, selFloor, selIndex, "Materiales de la pared",
+                    ("Lado izquierdo", seg.id + "/L"), ("Lado derecho", seg.id + "/R"),
+                    ("Cantos", seg.id + "/start"), ("Tapa", seg.id + "/top"));
                 if (GUILayout.Button("Quitar pared"))
                 {
                     string segId = seg.id;
@@ -134,11 +148,47 @@ namespace LevelBuilder.Editor
             }
 
             DrawOpeningSection(b);
+            DrawOpeningMaterials(b);
             DrawStairSection(b);
+            DrawStairMaterials(b);
 
             EditorGUILayout.Space();
             showRaw = EditorGUILayout.Foldout(showRaw, "Datos (avanzado)");
             if (showRaw) DrawDefaultInspector();
+        }
+
+        static void MaterialFields(Building b, FloorData f, int fi, string title, params (string label, string key)[] faces)
+        {
+            if (f == null) return;
+            EditorGUILayout.LabelField(title, EditorStyles.miniBoldLabel);
+            var data = b.data;
+            foreach (var (label, key) in faces)
+            {
+                EditorGUI.BeginChangeCheck();
+                var m = (Material)EditorGUILayout.ObjectField(label, FaceMaterialRules.Get(data, f, key), typeof(Material), false);
+                if (EditorGUI.EndChangeCheck())
+                    BuildingEditorUtil.Mutate(b, "Material de cara", fi, () => FaceMaterialRules.Set(data, f, key, m));
+            }
+        }
+
+        static void DrawOpeningMaterials(Building b)
+        {
+            var f = OpeningSelection.Floor(b);
+            var (_, o) = OpeningSelection.Find(b);
+            if (f == null || o == null) return;
+            MaterialFields(b, f, b.data.floors.IndexOf(f), "Materiales de la abertura", ("Jamba", o.id + "/jamb"));
+        }
+
+        static void DrawStairMaterials(Building b)
+        {
+            var s = StairSelection.Find(b);
+            if (s == null) return;
+            int from = b.data.FloorIndex(s.fromFloorId);
+            if (from < 0) return;
+            string k = "stair:" + s.id + "/";
+            MaterialFields(b, b.data.floors[from], from, "Materiales de la escalera",
+                ("Huella", k + "tread"), ("Contrahuella", k + "riser"), ("Lateral", k + "side"),
+                ("Descansillo", k + "landing"), ("Barandilla", k + "rail"));
         }
 
         void DrawOpeningSection(Building b)
