@@ -80,8 +80,8 @@ public class StairWalkTests
     // down through the hole, ending on floor 0 beyond the bottom edge. Walking down, the controller's leading
     // capsule side reaches the hole edge while it still stands uphill on the ramp, lifted by its step offset
     // (a CharacterController applies it on every grounded move, ramp or not): hence StepAllowance always.
-    // (2.7 m, ramp on) is not supported for the same reason as (2.7 m, ramp off) in the climb: the hole already
-    // spans the whole stair and its edge at the bottom riser is too low for the lifted capsule.
+    // At 2.7 m the hole extends before the bottom riser edge (StairLayout step 6), so (2.7 m, ramp on) passes too.
+    [TestCase(2.7f, true)]
     [TestCase(3.0f, true)]
     [TestCase(3.3f, true)]
     [TestCase(3.0f, false)]

@@ -356,4 +356,14 @@ public class StairValidatorTests
         Assert.IsTrue(StairAutoFix.CanTry(v));
         Assert.IsFalse(StairAutoFix.CanTry(null));
     }
+
+    [Test] public void HoleMargin_IntoWall_IsHoleCrossesWall()
+    {
+        var b = Building();
+        Wall(b, 1, 0, 2.85f, 8, 2.85f); // stair y 1.5..2.5; wall faces at ~2.75 / 2.95
+        var s = Stair(b, P(1.5f, 2), P(6, 2));
+        Assert.IsTrue(StairValidator.Validate(b, s).Valid, string.Join(",", StairValidator.Validate(b, s).issues));
+        s.holeMargin = 0.4f;
+        CollectionAssert.AreEqual(Issues(StairIssue.HoleCrossesWall), StairValidator.Validate(b, s).issues);
+    }
 }

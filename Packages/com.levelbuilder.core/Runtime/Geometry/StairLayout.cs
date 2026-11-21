@@ -53,6 +53,10 @@ namespace LevelBuilder.Geometry
         /// moves up by it on every grounded move, climbing the steps or walking down the collision ramp.
         /// </summary>
         public const float StepAllowance = 0.3f;
+        /// <summary>Default StairData.headroom (Headroom + CapsuleAllowance), used when a stair carries none.</summary>
+        public const float DefaultHeadroom = Headroom + CapsuleAllowance;
+        /// <summary>Radius plus skin width of a default CharacterController (0.5 + 0.08).</summary>
+        public const float CapsuleRadius = 0.58f;
         public const float CornerAngle = 30f;
         /// <summary>Largest turn a single Corner point may make (U-stairs use two corners).</summary>
         public const float MaxCornerTurn = 150f;
@@ -136,6 +140,9 @@ namespace LevelBuilder.Geometry
             float ceiling = to.elevation - to.slabThickness;
             float sPos = 0f;
             int ci = 0;
+            // Per piece: centerline start, and for landings the corner vertex and reach (to rebuild them wider).
+            var starts = new List<float>();
+            var landingAt = new List<(int vi, float reach)>();
             for (int k = 0; k < n - 1; k++)
             {
                 while (ci < cornerIdx.Count && cl.cum[cornerIdx[ci]] <= sPos + Tol) ci++;
@@ -143,17 +150,20 @@ namespace LevelBuilder.Geometry
                 piece.clearance = ceiling - (from.elevation + piece.height);
                 cl.Section(sPos, h, out piece.frontA, out piece.frontB);
                 List<Vector2> left, right;
+                starts.Add(sPos);
                 if (ci < cornerIdx.Count && sPos + tread > cl.cum[cornerIdx[ci]] - reach[ci] + Tol)
                 {
                     float e = reach[ci];
                     int vi = cornerIdx[ci++];
                     piece.kind = StairPieceKind.Landing;
+                    landingAt.Add((vi, e));
                     Landing(cl, vi, sPos, h, e, out left, out right);
                     sPos = cl.cum[vi] + e;
                 }
                 else
                 {
                     piece.kind = StairPieceKind.Tread;
+                    landingAt.Add((-1, 0f));
                     cl.Section(sPos + tread, h, out var l1, out var r1);
                     left = new List<Vector2> { piece.frontA, l1 };
                     right = new List<Vector2> { piece.frontB, r1 };
@@ -180,19 +190,68 @@ namespace LevelBuilder.Geometry
             r.arrivalZone = new List<Vector2> { r.topB, r.topB + fwd, r.topA + fwd, r.topA };
 
             // 6. Hole: boundary of the union of the pieces that lack headroom (the last riser has no plan area).
-            // A piece needs the hole when the free height above the NEXT step up is under Headroom +
-            // CapsuleAllowance: the slab edge sits on the piece's front edge, where the walking surface (ramp
+            // A piece needs the hole when the free height above the NEXT step up is under s.headroom (default
+            // Headroom + CapsuleAllowance) + StepAllowance: the slab edge sits on the piece's front edge, where the walking surface (ramp
             // through the nosings) is already at the piece's height, so the previous piece, left out, guarantees
             // that much free height under the edge.
             // StepAllowance applies with the collision ramp too: a CharacterController lifts by its step offset on
             // every grounded move, and walking DOWN its leading side reaches the edge while it still stands uphill.
             float riser = r.riser;
-            float need = Headroom + CapsuleAllowance + StepAllowance;
+            float headroom = s.headroom > 0f && !float.IsInfinity(s.headroom) ? s.headroom : DefaultHeadroom;
+            float margin = s.holeMargin > 0f && !float.IsInfinity(s.holeMargin) ? s.holeMargin : 0f;
+            float need = headroom + StepAllowance;
             int first = r.pieces.FindIndex(p => p.clearance - riser < need);
             if (first >= 0)
             {
+                // Extension before the stair: when the hole starts at the first piece, its edge would sit on the
+                // bottom riser edge, where the walking surface is one riser up (ramp nosing / first step). If the
+                // free height there, (ceiling - from.elevation) - riser, is under need, the hole runs back along
+                // -startDir by ext. The ramp run-in rises linearly from 0 one tread before the edge to riser at it:
+                // surface(-x) = riser * (1 - x / tread). With room = (ceiling - from.elevation) - need:
+                //   room >= 0: ext = tread * (1 - room / riser), where the surface drops to room (conservative:
+                //              the capsule clears the edge with need at the surface there);
+                //   room <  0: the shortfall is at floor level, ext = tread + CapsuleRadius (whole run-in plus the
+                //              capsule's leading side).
+                float ext = 0f;
+                float free0 = ceiling - from.elevation;
+                if (first == 0 && free0 - riser < need)
+                {
+                    float room = free0 - need;
+                    ext = room >= 0f ? tread * Mathf.Clamp01(1f - room / riser) : tread + CapsuleRadius;
+                }
+                // holeMargin widens every hole piece by margin per side and extends the hole margin further back.
+                float hw = h + margin;
                 var polys = new List<List<Vector2>>();
-                for (int k = first; k < r.pieces.Count; k++) polys.Add(r.pieces[k].polygon);
+                for (int k = first; k < r.pieces.Count; k++)
+                {
+                    if (margin <= 0f) { polys.Add(r.pieces[k].polygon); continue; }
+                    List<Vector2> wl, wr;
+                    if (landingAt[k].vi >= 0) Landing(cl, landingAt[k].vi, starts[k], hw, landingAt[k].reach, out wl, out wr);
+                    else
+                    {
+                        cl.Section(starts[k], hw, out var l0, out var r0);
+                        cl.Section(starts[k] + tread, hw, out var l1, out var r1);
+                        wl = new List<Vector2> { l0, l1 };
+                        wr = new List<Vector2> { r0, r1 };
+                    }
+                    polys.Add(Outline(wr, wl));
+                }
+                float backLen = ext + margin;
+                if (backLen > Tol)
+                {
+                    // Strip behind the first hole piece's front edge, following the centerline (straight before 0).
+                    float s1 = starts[first], s0 = s1 - backLen;
+                    int steps = Mathf.Clamp(Mathf.CeilToInt(backLen / 0.25f), 1, 1000);
+                    var bl = new List<Vector2>();
+                    var br = new List<Vector2>();
+                    for (int i = 0; i <= steps; i++)
+                    {
+                        cl.Section(Mathf.Lerp(s0, s1, (float)i / steps), hw, out var lp, out var rp);
+                        bl.Add(lp);
+                        br.Add(rp);
+                    }
+                    polys.Add(Outline(br, bl));
+                }
                 r.hole = UnionOutline(polys);
                 if (r.hole == null)
                 {

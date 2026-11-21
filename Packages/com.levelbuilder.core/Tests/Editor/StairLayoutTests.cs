@@ -433,4 +433,71 @@ public class StairLayoutTests
         Assert.GreaterOrEqual(ceiling - c.pieces[fc].height,
             StairLayout.Headroom + StairLayout.CapsuleAllowance + StairLayout.StepAllowance - 1e-4f);
     }
+
+    static float MinX(List<Vector2> p) { float m = float.MaxValue; foreach (var v in p) m = Mathf.Min(m, v.x); return m; }
+    static float MaxX(List<Vector2> p) { float m = float.MinValue; foreach (var v in p) m = Mathf.Max(m, v.x); return m; }
+
+    [Test] public void Headroom_HigherValue_StartsHoleEarlier()
+    {
+        var lo = Stair(P(0, 0), P(0, 10));
+        var hi = Stair(P(0, 0), P(0, 10));
+        hi.headroom = 2.6f;
+        var a = Compute(lo, 3.3f);
+        var c = Compute(hi, 3.3f);
+        Assert.Less(MinY(c.hole), MinY(a.hole) - 0.2f);
+    }
+
+    [Test] public void HoleMargin_ExtendsAndWidensHole()
+    {
+        var s0 = Stair(P(0, 0), P(0, 10));
+        var s1 = Stair(P(0, 0), P(0, 10));
+        s1.holeMargin = 0.4f;
+        var a = Compute(s0, 3.3f);
+        var c = Compute(s1, 3.3f);
+        Assert.AreEqual(MinY(a.hole) - 0.4f, MinY(c.hole), 1e-3f);
+        Assert.AreEqual(MaxY(a.hole), MaxY(c.hole), 1e-3f);
+        Assert.AreEqual(MinX(a.hole) - 0.4f, MinX(c.hole), 1e-3f);
+        Assert.AreEqual(MaxX(a.hole) + 0.4f, MaxX(c.hole), 1e-3f);
+        Assert.Greater(Triangulator.SignedArea(c.hole), Triangulator.SignedArea(a.hole) + 0.4f * 1.2f);
+    }
+
+    [Test] public void ClampStair_ClampsHeadroomAndMargin()
+    {
+        var s = new StairData { headroom = 10f, holeMargin = 5f };
+        BuildingData.ClampStair(s);
+        Assert.AreEqual(4f, s.headroom);
+        Assert.AreEqual(1f, s.holeMargin);
+        s.headroom = 0.2f; s.holeMargin = -1f;
+        BuildingData.ClampStair(s);
+        Assert.AreEqual(1.5f, s.headroom);
+        Assert.AreEqual(0f, s.holeMargin);
+        s.headroom = float.NaN; s.holeMargin = float.NaN;
+        BuildingData.ClampStair(s);
+        Assert.AreEqual(2.25f, s.headroom);
+        Assert.AreEqual(0f, s.holeMargin);
+    }
+
+    [Test] public void OldData_DefaultsKeepCurrentHole([Values(3.0f, 3.3f)] float height)
+    {
+        // Stairs serialized before headroom/holeMargin existed deserialize with the defaults.
+        var old = JsonUtility.FromJson<StairData>("{\"id\":\"a\",\"width\":1.2,\"riserTarget\":0.18,\"tread\":0.28}");
+        Assert.AreEqual(2.25f, old.headroom);
+        Assert.AreEqual(0f, old.holeMargin);
+        old.route = new List<StairPoint> { P(0, 0), P(0, 10) };
+        var r = Compute(old, height);
+        // Previous rule: first piece with clearance - riser < 2.1 + 0.15 + 0.3, hole front at its front edge.
+        int first = r.pieces.FindIndex(p => p.clearance - r.riser < 2.55f);
+        Assert.GreaterOrEqual(first, 0);
+        Assert.AreEqual(r.pieces[first].frontA.y, MinY(r.hole), Eps);
+        Assert.AreEqual(-0.6f, MinX(r.hole), Eps);
+        Assert.AreEqual(0.6f, MaxX(r.hole), Eps);
+    }
+
+    [Test] public void LowFloor_HoleExtendsBeforeTheStair()
+    {
+        // 2.7 m: even at floor level the free height (2.5) is under the need (2.55): the hole reaches one tread
+        // plus a capsule radius (0.58) behind the bottom riser edge.
+        var r = Compute(Stair(P(0, 0), P(0, 10)), 2.7f);
+        Assert.AreEqual(-(0.28f + 0.58f), MinY(r.hole), 1e-3f);
+    }
 }

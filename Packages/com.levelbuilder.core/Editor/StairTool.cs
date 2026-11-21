@@ -69,6 +69,16 @@ namespace LevelBuilder.Editor
         /// <summary>Width from the plan position of the width handle: twice its distance to the start centre along side.</summary>
         public static float WidthFromHandle(Vector2 handle, Vector2 center, Vector2 side) =>
             2f * Mathf.Abs(Vector2.Dot(handle - center, side.normalized));
+
+        /// <summary>
+        /// Hole margin from the hole-start handle: how far (along -startDir) the handle lies behind the hole start
+        /// without margin (front0), snapped to 0.05 m and never negative.
+        /// </summary>
+        public static float MarginFromHandle(float handleAlong, float front0)
+        {
+            float m = Mathf.Round((front0 - handleAlong) / 0.05f) * 0.05f;
+            return Mathf.Max(0f, m);
+        }
     }
 
     /// <summary>
@@ -121,6 +131,8 @@ namespace LevelBuilder.Editor
 
         // Width handle: one Undo group per drag, collapsed once released.
         int widthUndoGroup = -1;
+        // Hole margin handle: one Undo group per drag, like the width handle.
+        int marginUndoGroup = -1;
 
         bool swallowDeleteCommand;
 
@@ -206,6 +218,7 @@ namespace LevelBuilder.Editor
                 DoPointHandles(b, f, fi, selected, e);
                 selected = Selected(b, f); // a handle may have changed it
                 if (selected != null && pressedPoint < 0) DoWidthHandle(b, f, fi, selected);
+                if (selected != null && pressedPoint < 0 && hasAbove) DoMarginHandle(b, data.floors[fi + 1], fi, selected);
             }
 
             HandleKeys(b, f, fi, hasAbove, e);
@@ -431,9 +444,55 @@ namespace LevelBuilder.Editor
 
         void FinishWidthUndo(bool force)
         {
-            if (widthUndoGroup < 0 || (!force && GUIUtility.hotControl != 0)) return;
-            Undo.CollapseUndoOperations(widthUndoGroup);
+            if (!force && GUIUtility.hotControl != 0) return;
+            if (widthUndoGroup >= 0) Undo.CollapseUndoOperations(widthUndoGroup);
+            if (marginUndoGroup >= 0) Undo.CollapseUndoOperations(marginUndoGroup);
             widthUndoGroup = -1;
+            marginUndoGroup = -1;
+        }
+
+        /// <summary>
+        /// Handle on the start edge of the stair's slab hole, drawn on the floor above: dragging it toward the
+        /// stair start raises holeMargin (0.05 m steps, one Undo step per drag).
+        /// </summary>
+        void DoMarginHandle(Building b, FloorData above, int fi, StairData s)
+        {
+            var v = StairEditorUtil.Validation(b, s);
+            var l = v != null ? v.layout : null;
+            if (l == null || !l.ok || l.hole == null || l.hole.Count < 3) return;
+            var center = (l.bottomA + l.bottomB) * 0.5f;
+            var dir2 = l.startDir;
+            float along = float.MaxValue; // hole start, measured along startDir from the bottom centre
+            foreach (var p in l.hole) along = Mathf.Min(along, Vector2.Dot(p - center, dir2));
+            if (float.IsNaN(along) || float.IsInfinity(along)) return;
+            float front0 = along + s.holeMargin;
+            var t = b.transform;
+            var pos = BuildingEditorUtil.PlanToWorld(b, center + dir2 * along, above.elevation);
+            var dir = t.TransformDirection(new Vector3(-dir2.x, 0f, -dir2.y)).normalized;
+            float size = HandleUtility.GetHandleSize(pos) * 0.08f;
+            Handles.color = SelectedColor;
+            EditorGUI.BeginChangeCheck();
+            var moved = Handles.Slider(pos, dir, size, Handles.DotHandleCap, 0f);
+            if (!EditorGUI.EndChangeCheck()) return;
+
+            var lp = t.InverseTransformPoint(moved);
+            float a = Vector2.Dot(new Vector2(lp.x, lp.z) - center, dir2);
+            float m = StairEditorUtil.MarginFromHandle(a, front0);
+            if (float.IsNaN(m) || float.IsInfinity(m) || Mathf.Approximately(m, s.holeMargin)) return;
+            if (marginUndoGroup < 0)
+            {
+                Undo.IncrementCurrentGroup();
+                Undo.SetCurrentGroupName("Margen del hueco");
+                marginUndoGroup = Undo.GetCurrentGroup();
+            }
+            string sid = s.id;
+            BuildingEditorUtil.Mutate(b, "Margen del hueco", fi, () =>
+            {
+                var st = b.data.FindStair(sid);
+                if (st == null) return;
+                st.holeMargin = m;
+                BuildingData.ClampStair(st);
+            });
         }
 
         static bool IsDeleteKey(KeyCode k) => k == KeyCode.Delete || k == KeyCode.Backspace;

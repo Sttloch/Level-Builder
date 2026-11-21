@@ -234,6 +234,13 @@ namespace LevelBuilder.Editor
             StairToggle(b, from, sid, "Rampa de colisión", "Rampa de escalera", s.collisionRamp, (st, v) => st.collisionRamp = v,
                 "Una rampa invisible hace de suelo al subir y bajar; los escalones no tienen colisión propia.");
 
+            EditorGUILayout.LabelField("Hueco", EditorStyles.miniBoldLabel);
+            StairFloat(b, from, sid, "Altura libre", "Altura libre de escalera", s.headroom, (st, v) => st.headroom = v,
+                "Altura libre que el hueco garantiza en su borde (1.5–4 m). Súbela para personajes más altos.");
+            StairFloat(b, from, sid, "Margen del hueco", "Margen del hueco", s.holeMargin, (st, v) => st.holeMargin = v,
+                "Metros extra que el hueco se alarga hacia el inicio de la escalera y se ensancha por cada lado (0–1 m).");
+            EditorGUILayout.LabelField("Personaje de hasta " + (s.headroom - 0.25f).ToString("0.00") + " m", EditorStyles.miniLabel);
+
             // Validated here once per Layout pass, so the panel is current right after an edit (the renderer's
             // StairValidations only catch up at its next regeneration).
             if (stairValidation == null || stairValidationId != sid || Event.current.type == EventType.Layout)

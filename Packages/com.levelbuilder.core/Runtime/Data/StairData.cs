@@ -26,5 +26,12 @@ namespace LevelBuilder
         public bool railLeft = true;
         public bool railRight = true;
         public bool collisionRamp = true;
+        /// <summary>
+        /// Free height the slab hole guarantees over the walking surface at its edge (headroom plus capsule
+        /// allowance; StairLayout.StepAllowance is always added on top). Range 1.5–4.0.
+        /// </summary>
+        public float headroom = 2.25f;
+        /// <summary>Extra metres the hole extends toward the stair start and widens on each side. Range 0–1.</summary>
+        public float holeMargin = 0f;
     }
 }

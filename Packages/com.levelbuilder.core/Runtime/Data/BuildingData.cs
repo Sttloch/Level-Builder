@@ -116,6 +116,8 @@ namespace LevelBuilder
             s.width = Mathf.Clamp(s.width, 0.6f, 3.0f);
             s.riserTarget = Mathf.Clamp(s.riserTarget, 0.12f, 0.20f);
             s.tread = Mathf.Clamp(s.tread, 0.25f, 0.32f);
+            s.headroom = float.IsNaN(s.headroom) ? 2.25f : Mathf.Clamp(s.headroom, 1.5f, 4.0f);
+            s.holeMargin = float.IsNaN(s.holeMargin) ? 0f : Mathf.Clamp(s.holeMargin, 0f, 1.0f);
         }
 
         /// <summary>Sets a floor's height and restacks the elevations of the floors above it.</summary>
