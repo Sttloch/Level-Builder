@@ -55,6 +55,7 @@ namespace LevelBuilder.Geometry
             float h, List<OpeningRect> accepted)
         {
             // Written as !(x >= limit) so NaN fails every check (and ±∞ falls outside the wall).
+            if (!(h > 0.01f)) return OpeningIssue.TooTall; // wall-less edge: nothing to open
             if (!(o.width >= MinSize) || !(o.height >= MinSize)) return OpeningIssue.TooSmall;
             if (!built || !(r.u0 >= 0f) || !(r.u1 <= len)) return OpeningIssue.OutsideWall;
             if (r.u0 < cut.start + Margin || r.u1 > len - cut.end - Margin) return OpeningIssue.IntoJoint;

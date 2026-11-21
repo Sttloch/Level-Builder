@@ -41,6 +41,7 @@ namespace LevelBuilder.Geometry
             float top = f.elevation + f.height;
             foreach (var r in PlanarFaces.Compute(f).regions)
             {
+                if (r.open) continue; // balconies and walkways: floor slab only
                 if (!Prepare(r, holes, out var outer, out var allHoles, out var verts, out var tris)) continue;
                 string key = "region:" + r.key;
                 AddHorizontal(md, key + "/ceiling", verts, tris, isTopFloor ? top : top - f.slabThickness, Vector3.down);

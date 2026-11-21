@@ -129,7 +129,8 @@ namespace LevelBuilder
 
         void CopyExteriorFrom(FloorData below, FloorData f)
         {
-            var exterior = PlanarFaces.Compute(below).exteriorSegmentIds;
+            // Only full-height walls form the copied contour: low edges (balconies, walkways) stay below.
+            var exterior = PlanarFaces.ComputeFullHeight(below).exteriorSegmentIds;
             var map = new Dictionary<string, WallNode>();
             WallNode Clone(string belowId)
             {

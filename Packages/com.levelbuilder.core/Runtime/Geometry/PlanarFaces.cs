@@ -14,6 +14,8 @@ namespace LevelBuilder.Geometry
         public List<List<Vector2>> holes = new List<List<Vector2>>();
         /// <summary>Sorted segment ids joined by "|"; stable while topology is unchanged.</summary>
         public string key;
+        /// <summary>True when some boundary segment is lower than the floor height (balcony, walkway): floor slab but no ceiling or roof.</summary>
+        public bool open;
     }
 
     public class PlanarResult
@@ -30,6 +32,19 @@ namespace LevelBuilder.Geometry
             public float angle;
             public HalfEdge twin, next;
             public bool visited;
+        }
+
+        /// <summary>Tolerance below the floor height under which a segment counts as low (opens its regions).</summary>
+        public const float FullHeightTol = 0.01f;
+
+        /// <summary>Same as <see cref="Compute"/> but using only the full-height segments of the floor.</summary>
+        public static PlanarResult ComputeFullHeight(FloorData f)
+        {
+            if (f == null || f.segments == null) return new PlanarResult();
+            var copy = new FloorData { id = f.id, name = f.name, elevation = f.elevation, height = f.height,
+                slabThickness = f.slabThickness, nodes = f.nodes,
+                segments = f.segments.FindAll(s => s.Height(f) >= f.height - FullHeightTol) };
+            return Compute(copy);
         }
 
         public static PlanarResult Compute(FloorData f)
@@ -55,6 +70,8 @@ namespace LevelBuilder.Geometry
 
             // Remove bridges (this includes dangling chains): they never bound a region and would make
             // face polygons non-simple. Bridges are not exterior.
+            var segById = new Dictionary<string, WallSegment>();
+            foreach (var s in segs) segById[s.id] = s;
             var alive = new HashSet<WallSegment>(segs);
             foreach (var br in FindBridges(segs)) alive.Remove(br);
             if (alive.Count == 0) return result;
@@ -125,6 +142,8 @@ namespace LevelBuilder.Geometry
                         var sorted = new List<string>(region.segmentIds);
                         sorted.Sort(StringComparer.Ordinal);
                         region.key = string.Join("|", sorted);
+                        foreach (var e in face)
+                            if (segById[e.segmentId].Height(f) < f.height - FullHeightTol) { region.open = true; break; }
                         result.regions.Add(region);
                         regionComp.Add(comp);
                         regionArea.Add(area);
