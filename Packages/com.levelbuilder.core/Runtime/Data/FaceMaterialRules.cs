@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using LevelBuilder.Geometry;
@@ -25,19 +26,30 @@ namespace LevelBuilder
             ("/floor", RegionField.Floor), ("/ceiling", RegionField.Ceiling), ("/roof", RegionField.Ceiling)
         };
 
-        public static Material Get(BuildingData d, FloorData f, string faceKey)
+        public static Material Get(BuildingData d, FloorData f, string faceKey) => Get(d, f, faceKey, null);
+
+        /// <summary>As <see cref="Get(BuildingData, FloorData, string)"/>; regions = PlanarFaces.Compute(f).regions,
+        /// precomputed by the caller (null: computed when a region key needs them). When several paints lie in the
+        /// region (merged rooms), each field takes the last non-null value.</summary>
+        public static Material Get(BuildingData d, FloorData f, string faceKey, List<Region> regions)
         {
             if (d == null || f == null || string.IsNullOrEmpty(faceKey)) return null;
-            if (faceKey.StartsWith(RegionPrefix))
+            if (faceKey.StartsWith(RegionPrefix, StringComparison.Ordinal))
             {
                 if (!SplitRegion(faceKey, out var key, out var field)) return null;
-                var r = FindRegion(f, key);
-                var p = r != null ? PaintIn(f, r) : null;
-                if (p == null) return null;
-                return field == RegionField.Floor ? p.floor : field == RegionField.Ceiling ? p.ceiling : p.edge;
+                var r = FindRegion(f, key, regions);
+                if (r == null || f.regionPaints == null) return null;
+                for (int i = f.regionPaints.Count - 1; i >= 0; i--)
+                {
+                    var p = f.regionPaints[i];
+                    if (p == null || !Contains(r, p.seed)) continue;
+                    var m = field == RegionField.Floor ? p.floor : field == RegionField.Ceiling ? p.ceiling : p.edge;
+                    if (m != null) return m;
+                }
+                return null;
             }
             if (!SplitLast(faceKey, out var id, out var part)) return null;
-            if (faceKey.StartsWith(NodePrefix))
+            if (faceKey.StartsWith(NodePrefix, StringComparison.Ordinal))
             {
                 string nodeId = id.Substring(NodePrefix.Length);
                 foreach (var s in f.segments)
@@ -45,7 +57,7 @@ namespace LevelBuilder
                         return s.materials.top;
                 return null;
             }
-            if (faceKey.StartsWith(StairPrefix))
+            if (faceKey.StartsWith(StairPrefix, StringComparison.Ordinal))
             {
                 var st = d.FindStair(id.Substring(StairPrefix.Length));
                 return st?.materials != null ? StairField(st.materials, part, null, false) : null;
@@ -59,13 +71,17 @@ namespace LevelBuilder
         /// <summary>Stores m in the field the key maps to. For region keys the paint is anchored at regionSeed
         /// (default: an interior point of the region); an existing paint of that region is updated instead.
         /// Node keys are derived from their segments and are ignored.</summary>
-        public static void Set(BuildingData d, FloorData f, string faceKey, Material m, Vector2? regionSeed = null)
+        public static void Set(BuildingData d, FloorData f, string faceKey, Material m, Vector2? regionSeed = null) =>
+            Set(d, f, faceKey, m, null, regionSeed);
+
+        /// <summary>As the convenience overload with precomputed regions (null: computed when needed).</summary>
+        public static void Set(BuildingData d, FloorData f, string faceKey, Material m, List<Region> regions, Vector2? regionSeed = null)
         {
             if (d == null || f == null || string.IsNullOrEmpty(faceKey)) return;
-            if (faceKey.StartsWith(RegionPrefix))
+            if (faceKey.StartsWith(RegionPrefix, StringComparison.Ordinal))
             {
                 if (!SplitRegion(faceKey, out var key, out var field)) return;
-                var r = FindRegion(f, key);
+                var r = FindRegion(f, key, regions);
                 if (r == null) return;
                 bool seedOk = regionSeed.HasValue && Contains(r, regionSeed.Value);
                 var p = PaintIn(f, r);
@@ -84,8 +100,8 @@ namespace LevelBuilder
                 return;
             }
             if (!SplitLast(faceKey, out var id, out var part)) return;
-            if (faceKey.StartsWith(NodePrefix)) return;
-            if (faceKey.StartsWith(StairPrefix))
+            if (faceKey.StartsWith(NodePrefix, StringComparison.Ordinal)) return;
+            if (faceKey.StartsWith(StairPrefix, StringComparison.Ordinal))
             {
                 var st = d.FindStair(id.Substring(StairPrefix.Length));
                 if (st == null) return;
@@ -113,7 +129,7 @@ namespace LevelBuilder
             var result = new List<string>();
             if (string.IsNullOrEmpty(faceKey)) return result;
             string prefix; string[] parts;
-            if (faceKey.StartsWith(RegionPrefix))
+            if (faceKey.StartsWith(RegionPrefix, StringComparison.Ordinal))
             {
                 if (!SplitRegion(faceKey, out var key, out _)) return result;
                 prefix = RegionPrefix + key; parts = RegionParts;
@@ -122,8 +138,8 @@ namespace LevelBuilder
             {
                 if (!SplitLast(faceKey, out var id, out _)) return result;
                 prefix = id;
-                if (faceKey.StartsWith(NodePrefix)) { result.Add(faceKey); return result; }
-                if (faceKey.StartsWith(StairPrefix)) parts = StairParts;
+                if (faceKey.StartsWith(NodePrefix, StringComparison.Ordinal)) { result.Add(faceKey); return result; }
+                if (faceKey.StartsWith(StairPrefix, StringComparison.Ordinal)) parts = StairParts;
                 else if (d != null && f != null && d.FindOpening(f, id).o != null) parts = OpeningParts;
                 else parts = WallParts;
             }
@@ -145,7 +161,7 @@ namespace LevelBuilder
             string rest = faceKey.Substring(RegionPrefix.Length);
             foreach (var (suffix, fld) in RegionSuffixes)
             {
-                if (!rest.EndsWith(suffix)) continue;
+                if (!rest.EndsWith(suffix, StringComparison.Ordinal)) continue;
                 key = rest.Substring(0, rest.Length - suffix.Length);
                 field = fld;
                 return true;
@@ -153,7 +169,8 @@ namespace LevelBuilder
             return false;
         }
 
-        static Region FindRegion(FloorData f, string key) => PlanarFaces.Compute(f).regions.Find(r => r.key == key);
+        static Region FindRegion(FloorData f, string key, List<Region> regions) =>
+            (regions ?? PlanarFaces.Compute(f).regions).Find(r => r.key == key);
 
         static bool Contains(Region r, Vector2 p) =>
             PlanarFaces.PointInPolygon(p, r.polygon) && !r.holes.Exists(h => PlanarFaces.PointInPolygon(p, h));

@@ -16,15 +16,25 @@ namespace LevelBuilder.Geometry
     public static class SlabMeshBuilder
     {
         /// <summary>Slab occupying [elevation - slab, elevation]: top, bottom and edge faces.</summary>
-        public static MeshData BuildFloor(FloorData f, IList<IList<Vector2>> holes = null)
+        /// <remarks>
+        /// below: the floor underneath (null for floor 0). A region whose interior point lies in a closed (not open)
+        /// region of that floor gets no "/floor/under" face: the ceiling below already covers it (no z-fighting).
+        /// </remarks>
+        public static MeshData BuildFloor(FloorData f, IList<IList<Vector2>> holes = null, FloorData below = null) =>
+            BuildFloor(f, PlanarFaces.Compute(f).regions, holes, below != null ? PlanarFaces.Compute(below).regions : null);
+
+        /// <summary>As <see cref="BuildFloor(FloorData, IList{IList{Vector2}}, FloorData)"/> with precomputed regions
+        /// of this floor and of the floor below (null = none below).</summary>
+        public static MeshData BuildFloor(FloorData f, List<Region> regions, IList<IList<Vector2>> holes, List<Region> belowRegions)
         {
             var md = new MeshData();
-            foreach (var r in PlanarFaces.Compute(f).regions)
+            foreach (var r in regions)
             {
                 if (!Prepare(r, holes, out var outer, out var allHoles, out var verts, out var tris)) continue;
                 string key = "region:" + r.key + "/floor";
                 AddHorizontal(md, key, verts, tris, f.elevation, Vector3.up);
-                AddHorizontal(md, key + "/under", verts, tris, f.elevation - f.slabThickness, Vector3.down);
+                if (!CoveredBelow(r, belowRegions))
+                    AddHorizontal(md, key + "/under", verts, tris, f.elevation - f.slabThickness, Vector3.down);
                 AddSides(md, key + "/edge", outer, allHoles, f.elevation - f.slabThickness, f.elevation);
             }
             return md;
@@ -35,11 +45,15 @@ namespace LevelBuilder.Geometry
         /// floor: otherwise the next floor's slab occupies that space). The top floor also gets a roof
         /// slab [top, top + slab] (top and edge faces; its underside is the ceiling face itself).
         /// </summary>
-        public static MeshData BuildCeiling(FloorData f, bool isTopFloor, IList<IList<Vector2>> holes = null)
+        public static MeshData BuildCeiling(FloorData f, bool isTopFloor, IList<IList<Vector2>> holes = null) =>
+            BuildCeiling(f, PlanarFaces.Compute(f).regions, isTopFloor, holes);
+
+        /// <summary>As <see cref="BuildCeiling(FloorData, bool, IList{IList{Vector2}})"/> with precomputed regions.</summary>
+        public static MeshData BuildCeiling(FloorData f, List<Region> regions, bool isTopFloor, IList<IList<Vector2>> holes)
         {
             var md = new MeshData();
             float top = f.elevation + f.height;
-            foreach (var r in PlanarFaces.Compute(f).regions)
+            foreach (var r in regions)
             {
                 if (r.open) continue; // balconies and walkways: floor slab only
                 if (!Prepare(r, holes, out var outer, out var allHoles, out var verts, out var tris)) continue;
@@ -55,6 +69,16 @@ namespace LevelBuilder.Geometry
                 }
             }
             return md;
+        }
+
+        static bool CoveredBelow(Region r, List<Region> below)
+        {
+            if (below == null || below.Count == 0 || !PlanarFaces.InteriorPoint(r, out var p)) return false;
+            foreach (var b in below)
+                if (!b.open && b.polygon != null && PlanarFaces.PointInPolygon(p, b.polygon) &&
+                    !b.holes.Exists(h => PlanarFaces.PointInPolygon(p, h)))
+                    return true;
+            return false;
         }
 
         static bool Prepare(Region r, IList<IList<Vector2>> extraHoles, out List<Vector2> outer,

@@ -203,9 +203,20 @@ namespace LevelBuilder
             BuildSet();
         }
 
+        // Materials/library the generated floors were built with: a change re-skins every floor (also the glass,
+        // whose clone of the old default would otherwise be destroyed under floors not being rebuilt).
+        Material builtDefault;
+        MaterialLibrary builtLibrary;
+        bool builtOnce;
+
         void BuildSet()
         {
             int n = B.data.floors.Count;
+            if (builtOnce && (!ReferenceEquals(builtDefault, defaultMaterial) || !ReferenceEquals(builtLibrary, B.library)))
+                for (int i = 0; i < n; i++) toBuild.Add(i);
+            builtDefault = defaultMaterial;
+            builtLibrary = B.library;
+            builtOnce = true;
             ValidateStairs();
             RemoveGenerated(n);
             foreach (var i in toBuild)
@@ -251,11 +262,15 @@ namespace LevelBuilder
             var marker = root.AddComponent<GeneratedFloorMarker>();
             marker.ownerId = GeneratedFloorMarker.KeyOf(this);
             marker.hideFlags = GenFlags | HideFlags.HideInInspector;
-            AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation));
-            AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f, StairHoles(f.id, false)));
-            AddPart(root.transform, "Ceiling", SlabMeshBuilder.BuildCeiling(f, top, StairHoles(f.id, true)));
+            // Regions once per floor build: shared by the slabs and the region material lookups.
+            var regions = PlanarFaces.Compute(f).regions;
+            var below = i > 0 && B.data.floors[i - 1] != null ? PlanarFaces.Compute(B.data.floors[i - 1]).regions : null;
+            System.Func<string, Material> mat = key => MaterialOf(f, key, regions);
+            AddPart(root.transform, "Walls", WallMeshBuilder.Build(f, f.elevation), mat);
+            AddPart(root.transform, "Floor", SlabMeshBuilder.BuildFloor(f, regions, StairHoles(f.id, false), below), mat);
+            AddPart(root.transform, "Ceiling", SlabMeshBuilder.BuildCeiling(f, regions, top, StairHoles(f.id, true)), mat);
             BuildOpenings(root.transform, f);
-            BuildStairs(root.transform, f);
+            BuildStairs(root.transform, f, mat);
         }
 
         // ---- Stairs ----
@@ -285,7 +300,7 @@ namespace LevelBuilder
         }
 
         // Stairs leaving this floor; generated even when invalid (an invalid layout gives empty meshes).
-        void BuildStairs(Transform root, FloorData f)
+        void BuildStairs(Transform root, FloorData f, System.Func<string, Material> mat)
         {
             Transform stairs = null;
             foreach (var s in B.data.stairs)
@@ -297,7 +312,7 @@ namespace LevelBuilder
                 var l = v.layout;
                 float baseY = f.elevation;
 
-                var steps = AddMeshObject(go.transform, "Steps", StairMeshBuilder.Steps(s, l, baseY), BaseMaterial, out var stepsMesh);
+                var steps = AddMappedMeshObject(go.transform, "Steps", StairMeshBuilder.Steps(s, l, baseY), mat, out var stepsMesh);
                 if (!s.collisionRamp)
                 {
                     var mc = steps.AddComponent<MeshCollider>();
@@ -315,7 +330,7 @@ namespace LevelBuilder
                 {
                     // Visual rail (inset into the stair) without its own collider: thin boxes just outside the
                     // footprint block instead, so the whole width stays walkable.
-                    var rails = AddMeshObject(go.transform, "Rails", StairMeshBuilder.Rails(s, l, baseY), BaseMaterial, out _);
+                    var rails = AddMappedMeshObject(go.transform, "Rails", StairMeshBuilder.Rails(s, l, baseY), mat, out _);
                     AddColliderMesh(rails, "RailColliders", StairMeshBuilder.RailColliders(s, l, baseY));
                 }
             }
@@ -333,11 +348,38 @@ namespace LevelBuilder
 
         Material BaseMaterial => defaultMaterial != null ? defaultMaterial : DefaultMaterial();
 
-        void AddPart(Transform parent, string name, MeshData md)
+        // Stored material of the face, or the default (missing/destroyed references count as unassigned).
+        Material MaterialOf(FloorData f, string key, List<Region> regions)
         {
-            var go = AddMeshObject(parent, name, md, BaseMaterial, out var mesh);
+            var m = FaceMaterialRules.Get(B.data, f, key, regions);
+            return m != null ? m : BaseMaterial;
+        }
+
+        Vector2 SizeOf(Material m) => B.library != null ? B.library.SizeOf(m) : Vector2.one;
+
+        void AddPart(Transform parent, string name, MeshData md, System.Func<string, Material> mat)
+        {
+            var go = AddMappedMeshObject(parent, name, md, mat, out var mesh);
             var mc = go.AddComponent<MeshCollider>();
             if (mesh.vertexCount > 0) mc.sharedMesh = mesh;
+        }
+
+        // One submesh per material, UVs at real scale, plus the FaceKeyMap (triangle -> face key) for painting.
+        GameObject AddMappedMeshObject(Transform parent, string name, MeshData md, System.Func<string, Material> mat, out Mesh mesh)
+        {
+            var go = NewChild(parent, name);
+            var mf = go.AddComponent<MeshFilter>();
+            var mr = go.AddComponent<MeshRenderer>();
+            mesh = md.ToMesh(mat, SizeOf, out var materials, out var map);
+            mesh.hideFlags = GenFlags;
+            mesh.name = name;
+            mf.sharedMesh = mesh;
+            mr.sharedMaterials = materials.Length > 0 ? materials : new[] { BaseMaterial };
+            var keys = go.AddComponent<FaceKeyMap>();
+            keys.hideFlags = GenFlags | HideFlags.HideInInspector;
+            foreach (var e in map)
+                keys.entries.Add(new FaceKeyMap.Entry { key = e.key, submesh = e.submesh, firstTri = e.firstTri, triCount = e.triCount });
+            return go;
         }
 
         static GameObject AddMeshObject(Transform parent, string name, MeshData md, Material material, out Mesh mesh)
