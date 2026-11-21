@@ -129,4 +129,57 @@ public class OpenRegionTests
         Assert.IsFalse(r.valid);
         Assert.AreEqual(OpeningIssue.TooTall, r.issue);
     }
+
+    static float CeilingArea(MeshData md)
+    {
+        float area = 0f;
+        foreach (var g in md.groups)
+        {
+            if (!g.key.EndsWith("/ceiling")) continue;
+            for (int i = 0; i < g.triangles.Count; i += 3)
+            {
+                var a = md.vertices[g.triangles[i]]; var b = md.vertices[g.triangles[i + 1]]; var c = md.vertices[g.triangles[i + 2]];
+                area += Vector3.Cross(b - a, c - a).magnitude * 0.5f;
+            }
+        }
+        return area;
+    }
+
+    [Test] public void PlanterBoxInsideRoom_KeepsCeilings()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        Square(b, f);
+        Seg(b, f, 1, 1, 2, 1, 1f); Seg(b, f, 2, 1, 2, 2, 1f); Seg(b, f, 2, 2, 1, 2, 1f); Seg(b, f, 1, 2, 1, 1, 1f);
+        var regions = PlanarFaces.Compute(f).regions;
+        Assert.AreEqual(2, regions.Count);
+        foreach (var r in regions) Assert.IsFalse(r.open);
+        var ceil = SlabMeshBuilder.BuildCeiling(f, true);
+        foreach (var r in regions) Assert.IsTrue(HasGroup(ceil, "region:" + r.key + "/ceiling"));
+        Assert.AreEqual(16f, CeilingArea(ceil), 1e-3f);
+    }
+
+    [Test] public void HalfHeightPartition_BothHalvesKeepCeilings()
+    {
+        var b = new BuildingData(); var f = b.AddFloor();
+        Square(b, f);
+        Seg(b, f, 2, 0, 2, 4, 1.5f);
+        var regions = PlanarFaces.Compute(f).regions;
+        Assert.AreEqual(2, regions.Count);
+        var ceil = SlabMeshBuilder.BuildCeiling(f, true);
+        foreach (var r in regions)
+        {
+            Assert.IsFalse(r.open);
+            Assert.IsTrue(HasGroup(ceil, "region:" + r.key + "/ceiling"));
+        }
+        Assert.AreEqual(16f, CeilingArea(ceil), 1e-3f);
+    }
+
+    [Test] public void LowWall_StillBlocksStair_TinyWallIgnored()
+    {
+        var b = StairBuilding(1f, out var s);
+        Assert.Contains(StairIssue.Collision, StairValidator.Validate(b, s).issues);
+        b = StairBuilding(0.005f, out s);
+        var v = StairValidator.Validate(b, s);
+        Assert.IsTrue(v.Valid, string.Join(",", v.issues));
+    }
 }

@@ -34,20 +34,55 @@ namespace LevelBuilder.Geometry
             public bool visited;
         }
 
-        /// <summary>Tolerance below the floor height under which a segment counts as low (opens its regions).</summary>
-        public const float FullHeightTol = 0.01f;
-
         /// <summary>Same as <see cref="Compute"/> but using only the full-height segments of the floor.</summary>
         public static PlanarResult ComputeFullHeight(FloorData f)
         {
             if (f == null || f.segments == null) return new PlanarResult();
             var copy = new FloorData { id = f.id, name = f.name, elevation = f.elevation, height = f.height,
                 slabThickness = f.slabThickness, nodes = f.nodes,
-                segments = f.segments.FindAll(s => s.Height(f) >= f.height - FullHeightTol) };
-            return Compute(copy);
+                segments = f.segments.FindAll(s => s.IsFullHeight(f)) };
+            return ComputeCore(copy);
         }
 
+        /// <summary>
+        /// Regions of the floor. A region is open (balcony, walkway) when it is not enclosed by full-height
+        /// walls: a point inside it lies in no region of <see cref="ComputeFullHeight"/>.
+        /// </summary>
         public static PlanarResult Compute(FloorData f)
+        {
+            var result = ComputeCore(f);
+            if (result.regions.Count == 0) return result;
+            var full = ComputeFullHeight(f).regions;
+            foreach (var r in result.regions)
+            {
+                if (!InteriorPoint(r, out var p)) continue;
+                r.open = !full.Exists(fr => PlanarFaces.PointInPolygon(p, fr.polygon) &&
+                                            !fr.holes.Exists(h => PlanarFaces.PointInPolygon(p, h)));
+            }
+            return result;
+        }
+
+        /// <summary>A point strictly inside the region (outside its holes): centroid of a triangle of it.</summary>
+        static bool InteriorPoint(Region r, out Vector2 p)
+        {
+            p = default;
+            var holes = new List<IList<Vector2>>();
+            foreach (var h in r.holes) holes.Add(h);
+            var tris = Triangulator.Triangulate(r.polygon, holes, out var verts);
+            if (tris == null || tris.Count < 3) return false;
+            // Largest triangle: its centroid is the furthest from the boundary among the candidates.
+            int best = 0; float bestA = -1f;
+            for (int i = 0; i + 2 < tris.Count; i += 3)
+            {
+                var a = verts[tris[i]]; var b = verts[tris[i + 1]]; var c = verts[tris[i + 2]];
+                float area = Mathf.Abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
+                if (area > bestA) { bestA = area; best = i; }
+            }
+            p = (verts[tris[best]] + verts[tris[best + 1]] + verts[tris[best + 2]]) / 3f;
+            return true;
+        }
+
+        static PlanarResult ComputeCore(FloorData f)
         {
             var result = new PlanarResult();
             if (f == null || f.segments == null || f.segments.Count == 0) return result;
@@ -70,8 +105,6 @@ namespace LevelBuilder.Geometry
 
             // Remove bridges (this includes dangling chains): they never bound a region and would make
             // face polygons non-simple. Bridges are not exterior.
-            var segById = new Dictionary<string, WallSegment>();
-            foreach (var s in segs) segById[s.id] = s;
             var alive = new HashSet<WallSegment>(segs);
             foreach (var br in FindBridges(segs)) alive.Remove(br);
             if (alive.Count == 0) return result;
@@ -142,8 +175,6 @@ namespace LevelBuilder.Geometry
                         var sorted = new List<string>(region.segmentIds);
                         sorted.Sort(StringComparer.Ordinal);
                         region.key = string.Join("|", sorted);
-                        foreach (var e in face)
-                            if (segById[e.segmentId].Height(f) < f.height - FullHeightTol) { region.open = true; break; }
                         result.regions.Add(region);
                         regionComp.Add(comp);
                         regionArea.Add(area);

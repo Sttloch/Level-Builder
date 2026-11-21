@@ -135,7 +135,7 @@ namespace LevelBuilder.Geometry
                 var na = f.GetNode(seg.startNodeId);
                 var nb = f.GetNode(seg.endNodeId);
                 if (na == null || nb == null) continue;
-                if (seg.Height(f) <= 0.01f) continue; // wall-less edge: not an obstacle
+                if (seg.IsWallLess(f)) continue; // wall-less edge: not an obstacle
                 var d = nb.position - na.position;
                 if (d.magnitude < 1e-6f) continue;
                 var n = new Vector2(-d.y, d.x).normalized * (seg.thickness * 0.5f);
